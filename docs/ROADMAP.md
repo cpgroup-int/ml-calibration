@@ -87,7 +87,7 @@ All subsequent phases cite this harness in their acceptance criteria.
 Change *what information each measurement yields* before changing how
 decisions are made.
 
-### 1.1 Curve-summary likelihood in Step 5  *(effort: M, highest priority)*
+### 1.1 Curve-summary likelihood in Step 5  *(effort: M, highest priority)* — ✅ implemented
 
 **Now:** Step 5 fits only the scalar objective J. **Problem:** an HF
 measurement returns an ~80-bin β²(ν) curve; frequency shift, amplitude
@@ -96,17 +96,38 @@ degenerate at scalar level. The synthetic runs showed the consequence
 directly: a near-degenerate (z-offset, compression, mirror) likelihood
 ridge with an overconfident Laplace approximation.
 
-**Change:** replace the scalar observation model with a small vector of
-physically meaningful curve summaries — peak height, peak frequency,
-effective bandwidth, band flatness (+ J itself) — with a covariance
-from the Step-4 uncertainty propagation. This is observation level 4.2
-of the Step-5 design note, promoted to default. Full curve-level
-inference (level 4.3) remains an optional follow-up once 1.1 and the
-Phase-2 engine are in.
+**Change (as implemented):** each HF record carries the smooth summary
+vector (J, log peak, band centroid, bandwidth, flatness) with
+Monte-Carlo-propagated uncertainties
+(`madmax_calibration.summaries.CurveSummarizer`); Step 5 fits all
+components jointly with one discrepancy GP per component, amplitude
+priors floored at a few measurement sigmas
+(`discrepancy_sigma_floor`) so unmodelled systematics stay in the
+discrepancy channel, and one shared noise-inflation factor.
+`observation_level = "scalar"` retains the old behaviour for A/B runs;
+records without summaries fall back to it with a diagnostic. Full
+curve-level inference (design §4.3) remains the optional follow-up once
+the Phase-2 engine is in.
 
-**Acceptance:** on the benchmark harness, correctable detector-state
-parameters recover with materially smaller posterior error and honest
-coverage; HF count to convergence drops.
+**Acceptance (measured):**
+
+- *Clean-data A/B on identical datasets:* z-offset posterior sd
+  62 → 8.5 µm (~7×), compression 41 → 8.6 µm (~5×), and the loss
+  parameter goes from prior-dominated (sd 0.70, wrong sign) to
+  identified (0.37 ± 0.044 vs truth 0.30). Enforced by
+  `tests/test_curve_summaries.py`.
+- *Full-loop benchmark (3 seeds, window 1):* HF-to-converge 14.0 → 11.7
+  (−16%), hours 18.1 → 15.6, compression error 203 → 120 µm at equal
+  improvement significance (3/3 both) and 100% safety/budget
+  compliance; the example run's validated improvement rose from 12.5σ
+  to 15.3σ at the same HF count.
+- *Honest residual:* an in-loop z-offset bias of ~300 µm is **common to
+  both observation levels** — it stems from unmodelled constant
+  systematics (curve tilt, focus offset) buying the cheap θ_z
+  explanation, and the prior-sensitivity check now flags `z_offset` as
+  weakly identifiable in exactly these runs. Removing it is the job of
+  Phase 2 (misspecification-robust amortized inference) and Phase 4.1
+  (drift on θ), not of the observation level.
 
 ### 1.2 Physics-routed low-fidelity channel (reflectivity / group delay)  *(effort: L, deepest structural win)*
 

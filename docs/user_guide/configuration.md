@@ -178,15 +178,17 @@ optional* — they are what separates $\theta$ from discrepancy).
 
 | Field | Default | Meaning |
 |---|---|---|
+| `observation_level` | `"curve_summary"` | What each HF measurement contributes to the joint fit: the curve-summary vector (J, log peak, centroid, bandwidth, flatness — roadmap Phase 1.1) or, with `"scalar"`, only J (the pre-1.1 behaviour, kept for A/B benchmarking). |
 | `prior_sd_z_offset` ⚠ | 0.5 mm | Gaussian prior sd for the stack z-offset. |
 | `prior_sd_compression` ⚠ | 0.25 mm | Gaussian prior sd for the uniform gap error. |
 | `prior_sd_log_loss` | 0.7 | Gaussian prior sd for the log loss-scale. |
-| `discrepancy_amplitude_prior` | 0.05 | Half-normal prior scale for the discrepancy GP amplitude, *relative to* $|J_0|$. Tighter ⇒ residuals pushed into $\theta$/noise; looser ⇒ risk of discrepancy absorbing physics. |
+| `discrepancy_amplitude_prior` | 0.05 | Half-normal prior scale for each component's discrepancy GP amplitude, relative to that component's response scale. Tighter ⇒ residuals pushed into $\theta$/noise; looser ⇒ risk of discrepancy absorbing physics. |
+| `discrepancy_sigma_floor` | 5.0 | Floor on each amplitude prior, in units of the component's median measurement sigma — gives unmodelled systematics (e.g. a curve tilt shifting the band centroid) an affordable home in the discrepancy channel instead of biasing $\theta$. |
 | `discrepancy_lengthscale_bounds` | (0.1, 2.0) | GP lengthscale bounds in normalized control space. |
-| `noise_inflation_prior` | 0.02 | Half-normal prior scale for extra unmodelled noise (relative to $|J_0|$). |
+| `noise_inflation_prior` | 1.0 | Half-normal prior scale for the shared noise-inflation factor, in units of each component's typical measurement sigma. |
 | `drift_rate_prior` | 0.002 | Gaussian prior sd for the linear drift rate ($J$/hour). |
 | `min_hf_points_for_inference` | 3 | Below this, Step 5 refuses to fit. |
-| `prior_sensitivity_check` | True | Refit with a 3× wider discrepancy prior and flag parameters that move by more than their posterior sd as weakly identifiable. Costs one extra fit per iteration. |
+| `prior_sensitivity_check` | True | Refit with 3× wider discrepancy priors and flag parameters that move by more than their posterior sd as weakly identifiable. Costs one extra fit per iteration. |
 
 ## `step7` — {class}`~madmax_calibration.config.Step7Config`
 

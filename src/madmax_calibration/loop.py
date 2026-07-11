@@ -75,6 +75,9 @@ class CalibrationLoop:
         self.soft = SoftConstraintModel()
         self.rng = np.random.default_rng(self.config.seed)
         self.proposer = Step1Proposer(self.config, self.hard, self.soft, rng=self.rng)
+        from .summaries import CurveSummarizer
+
+        self.summarizer = CurveSummarizer(self.objective, simulator.freqs)
         self.history: list[dict] = []
 
     # ------------------------------------------------------------------
@@ -162,6 +165,7 @@ class CalibrationLoop:
             replicate_group=proposal.candidate_id if baseline_tag else None,
             baseline_or_incumbent=baseline_tag,
             rng=self.rng,
+            summarizer=self.summarizer,
         )
         self.dataset.append(record)
 
@@ -177,7 +181,8 @@ class CalibrationLoop:
 
         # ---- Step 0 ----------------------------------------------------
         step0: Step0Result = run_step0(
-            self.hardware, cfg, self.objective, self.hard, self.dataset, self.rng
+            self.hardware, cfg, self.objective, self.hard, self.dataset, self.rng,
+            summarizer=self.summarizer,
         )
         if verbose:
             print(f"[step0] J0 = {step0.J0:.4g} +/- {step0.sigma_J0:.4g}")

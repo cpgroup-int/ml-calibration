@@ -149,15 +149,27 @@ class Step1Config:
 class Step5Config:
     """Joint inference settings (Step 5 design, section 13.1: Level A)."""
 
+    # Observation level (Step 5 design, section 4): "curve_summary" fits
+    # the vector of curve summaries (J, log peak, centroid, bandwidth,
+    # flatness); "scalar" fits only J (the pre-Phase-1.1 behaviour, kept
+    # for A/B benchmarking).
+    observation_level: str = "curve_summary"
     # Gaussian prior standard deviations for detector-state parameters.
     prior_sd_z_offset: float = 0.5e-3      # global stack z-offset [m]
     prior_sd_compression: float = 0.25e-3  # uniform inter-disk gap error [m]
     prior_sd_log_loss: float = 0.7         # log of loss-scale factor
-    # Discrepancy GP prior (scalar objective level).
-    discrepancy_amplitude_prior: float = 0.05   # relative to |J0|
+    # Discrepancy GP amplitude prior, relative to each observation
+    # component's response scale...
+    discrepancy_amplitude_prior: float = 0.05
+    # ...but floored at this many median measurement sigmas per component,
+    # so unmodelled systematics (e.g. a receiver-chain tilt shifting the
+    # band centroid) can be absorbed by the discrepancy channel instead of
+    # biasing the detector-state parameters.
+    discrepancy_sigma_floor: float = 5.0
     discrepancy_lengthscale_bounds: tuple = (0.1, 2.0)  # normalized units
-    # Half-normal prior sd for the extra noise-inflation term (units of J).
-    noise_inflation_prior: float = 0.02
+    # Half-normal prior sd for the extra noise-inflation term, in units
+    # of each component's typical measurement sigma.
+    noise_inflation_prior: float = 1.0
     # Prior sd for the linear drift rate (units of J per hour).
     drift_rate_prior: float = 0.002
     min_hf_points_for_inference: int = 3

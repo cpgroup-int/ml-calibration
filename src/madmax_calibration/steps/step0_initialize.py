@@ -40,6 +40,7 @@ def run_step0(
     hard_constraints: HardConstraints,
     dataset: CalibrationDataset,
     rng: np.random.Generator,
+    summarizer=None,
 ) -> Step0Result:
     """Measure and validate the baseline at u_B = 0."""
     dim = hard_constraints.control_map.dim
@@ -70,6 +71,7 @@ def run_step0(
             replicate_group=group,
             baseline_or_incumbent="baseline",
             rng=rng,
+            summarizer=summarizer,
         )
         dataset.append(rec)
         if rec.usable_for_inference() and rec.J is not None:

@@ -174,7 +174,14 @@ class Step1Proposer:
         if budget.can_afford_hf() and (
             staleness > cfg1.rebaseline_after_hours or drift_scale > 2.0 * hf_noise
         ):
-            u_inc = best_rec.u_B_achieved if best_rec else np.zeros(self.control_map.dim)
+            # Re-command the recorded *command*, not the achieved readback:
+            # readback noise/hysteresis can sit marginally outside the hard
+            # travel box even though the command never did.
+            u_inc = (
+                best_rec.u_B_cmd
+                if best_rec is not None and best_rec.u_B_cmd is not None
+                else np.zeros(self.control_map.dim)
+            )
             return Proposal(
                 action=ActionType.REBASELINE,
                 fidelity=Fidelity.HF,
@@ -286,14 +293,15 @@ class Step1Proposer:
 
         # 22.1 Repeat the incumbent when its uncertainty dominates.
         if best_rec is not None and budget.can_afford_hf():
+            u_inc = best_rec.u_B_cmd if best_rec.u_B_cmd is not None else best_rec.u_B_achieved
             pred = model.predict(best_rec.u_B_achieved[None, :], t_future=now)
             if float(pred.latent_sd[0]) > cfg1.incumbent_sd_factor * model.hf_noise_sd:
                 return Proposal(
                     action=ActionType.REPLICATE_INCUMBENT,
                     fidelity=Fidelity.HF,
-                    u_B=best_rec.u_B_achieved,
+                    u_B=u_inc,
                     predicted_sd=float(pred.latent_sd[0]),
-                    expected_cost=self.expected_cost(best_rec.u_B_achieved, Fidelity.HF, current_achieved),
+                    expected_cost=self.expected_cost(u_inc, Fidelity.HF, current_achieved),
                     trust_region_size=trust_region.size,
                     reason=f"{why}; incumbent posterior sd {float(pred.latent_sd[0]):.3g} "
                     f"> {cfg1.incumbent_sd_factor} x HF noise",

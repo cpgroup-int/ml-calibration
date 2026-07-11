@@ -124,6 +124,10 @@ class MeasurementRecord:
     J: float | None = None
     sigma_J: float | None = None
     objective_id: str = ""
+    # Curve summaries (HF only; component 0 is J).  Used by the
+    # curve-summary observation level of Step 5 (roadmap Phase 1.1).
+    summaries: np.ndarray | None = None
+    summaries_sigma: np.ndarray | None = None
     # Bookkeeping.
     quality_flags: list[QualityFlag] = field(default_factory=list)
     valid: bool = True

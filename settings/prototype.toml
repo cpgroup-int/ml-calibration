@@ -76,12 +76,14 @@ n_theta_samples = 8
 seed = 0
 
 [step5]
+observation_level = "curve_summary"
 prior_sd_z_offset = 0.0005
 prior_sd_compression = 0.00025
 prior_sd_log_loss = 0.7
 discrepancy_amplitude_prior = 0.05
+discrepancy_sigma_floor = 5
 discrepancy_lengthscale_bounds = [0.1, 2]
-noise_inflation_prior = 0.02
+noise_inflation_prior = 1
 drift_rate_prior = 0.002
 min_hf_points_for_inference = 3
 prior_sensitivity_check = true

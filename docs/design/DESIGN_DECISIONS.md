@@ -98,11 +98,16 @@ substituted behind the same interface.
 ## 11. Step-5 inference level
 
 Level A of the design note: joint MAP over (θ, drift rate, noise
-inflation) with the discrepancy GP marginalized analytically inside the
+inflation) with the discrepancy GPs marginalized analytically inside the
 objective, Laplace uncertainty, prior-sensitivity refit for
-identifiability warnings.  Level B/C (partial/full posterior sampling) are
-future work; the `Step5Result` interface (posterior samples via
-`theta_samples`) already matches what they would provide.
+identifiability warnings.  The default observation level is
+**curve-summary** (design §4.2, roadmap Phase 1.1): each HF measurement
+contributes (J, log peak, band centroid, bandwidth, flatness) with one
+discrepancy GP per component; `observation_level = "scalar"` retains the
+J-only special case for A/B benchmarking.  Level B/C (partial/full
+posterior sampling) are future work; the `Step5Result` interface
+(posterior samples via `theta_samples`) already matches what they would
+provide.
 
 ## 12. Step-6 antenna convention
 
@@ -123,7 +128,8 @@ basis changes.
 ## Not implemented (deliberately, per the proposals' staging)
 
 - Multi-objective / Pareto-front calibration (Step 1 §18, Step 6 §10).
-- Curve-level and curve-summary Step-5 inference (§4.2–4.3) — scalar level only.
+- Full curve-level Step-5 inference (§4.3) — the curve-summary level
+  (§4.2) is implemented and default; the per-bin curve likelihood is not.
 - Full Bayesian sampling (MCMC/HMC) for Step 5 (Level C).
 - Knowledge-gradient / entropy-based information terms (the information
   value is the posterior-sd proxy of Step 1 §11).

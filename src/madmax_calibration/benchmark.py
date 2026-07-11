@@ -58,6 +58,10 @@ class RunResult:
     hours: float
     coverage_2sigma: float | None
     rms_standardized_residual: float | None
+    theta_z_error: float | None       # |estimate - truth| of the stack offset [m]
+    theta_z_sd: float | None          # its posterior sd [m]
+    theta_c_error: float | None       # |estimate - truth| of the compression [m]
+    theta_c_sd: float | None
     safety_ok: bool
     budget_ok: bool
     stop_reason: str
@@ -80,6 +84,10 @@ class BenchmarkSummary:
         hf_conv = self._values("hf_to_within_noise")
         hours = self._values("hours")
         cov = self._values("coverage_2sigma")
+        tz_err = self._values("theta_z_error")
+        tz_sd = self._values("theta_z_sd")
+        tc_err = self._values("theta_c_error")
+        tc_sd = self._values("theta_c_sd")
         return {
             "label": self.label,
             "runs": len(self.runs),
@@ -90,6 +98,8 @@ class BenchmarkSummary:
             + f" (of {hf.mean():.1f})",
             "hours": f"{hours.mean():.1f}",
             "coverage_2sigma": f"{cov.mean():.2f}" if len(cov) else "n/a",
+            "theta_z_err_um": f"{tz_err.mean() * 1e6:.0f} (sd {tz_sd.mean() * 1e6:.0f})" if len(tz_err) else "n/a",
+            "theta_c_err_um": f"{tc_err.mean() * 1e6:.0f} (sd {tc_sd.mean() * 1e6:.0f})" if len(tc_err) else "n/a",
             "safety": f"{sum(r.safety_ok for r in self.runs)}/{len(self.runs)}",
             "budget": f"{sum(r.budget_ok for r in self.runs)}/{len(self.runs)}",
         }
@@ -175,8 +185,9 @@ def run_one(
         and loop.hardware.now <= b.max_total_hours + 1e-9
     )
 
-    # Posterior-calibration metrics from the final predictive model.
+    # Posterior-calibration and theta-recovery metrics.
     coverage = rms_z = None
+    tz_err = tz_sd = tc_err = tc_sd = None
     if result.step5 is not None:
         from .steps.step6_predictive import run_step6
 
@@ -186,6 +197,17 @@ def run_one(
         )
         coverage = model.validation.get("coverage_2sigma")
         rms_z = model.validation.get("rms_standardized_residual")
+        truth = loop.hardware.truth
+        est = result.step5.theta_map
+        sd = np.sqrt(np.diag(result.step5.theta_cov))
+        # Compare against the drift-adjusted truth at the mid-time of the
+        # HF data (the stack offset drifts during the run).
+        t_mid = float(np.median([r.time for r in result.dataset.hf_records()]))
+        truth_z = truth.theta.z_offset + truth.drift_rate_z * t_mid
+        tz_err = abs(est.z_offset - truth_z)
+        tz_sd = float(sd[0])
+        tc_err = abs(est.compression - truth.theta.compression)
+        tc_sd = float(sd[1])
 
     return RunResult(
         label=label,
@@ -205,6 +227,10 @@ def run_one(
         hours=loop.hardware.now,
         coverage_2sigma=coverage,
         rms_standardized_residual=rms_z,
+        theta_z_error=tz_err,
+        theta_z_sd=tz_sd,
+        theta_c_error=tc_err,
+        theta_c_sd=tc_sd,
         safety_ok=safety_ok,
         budget_ok=budget_ok,
         stop_reason=result.stop_reason,
