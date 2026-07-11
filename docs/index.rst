@@ -78,6 +78,12 @@ Documentation contents
    testing
 
 .. toctree::
+   :maxdepth: 1
+   :caption: Roadmap
+
+   ROADMAP
+
+.. toctree::
    :maxdepth: 2
    :caption: API reference
 
