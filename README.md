@@ -93,6 +93,15 @@ sphinx-build -b html docs docs/_build/html
 # open docs/_build/html/index.html
 ```
 
+## Roadmap
+
+Planned conceptual upgrades — curve-level inference, a physics-routed
+reflectivity channel, amortized simulation-based inference for the
+detector state, a value-of-information decision layer, and transfer of
+calibration knowledge across the ~12 frequency windows of the 18–24 GHz
+campaign — are prioritized and sequenced in
+[`docs/ROADMAP.md`](docs/ROADMAP.md).
+
 ## Safety model
 
 Damage-relevant constraints (travel limits, minimum gaps, maximum step
