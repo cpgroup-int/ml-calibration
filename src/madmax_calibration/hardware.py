@@ -79,7 +79,7 @@ class MockTruth:
     """Hidden ground truth of the simulated detector."""
 
     theta: DetectorState = field(
-        default_factory=lambda: DetectorState(z_offset=0.6e-3, compression=0.25e-3, log_loss=0.3)
+        default_factory=lambda: DetectorState(z_offset=0.8e-3, compression=0.4e-3, log_loss=0.3)
     )
     beam_center: np.ndarray = field(default_factory=lambda: np.array([2.5e-3, -1.5e-3]))
     focus_optimum: float = 0.6e-3

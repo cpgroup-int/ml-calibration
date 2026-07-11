@@ -1,0 +1,195 @@
+# Calibration settings for the MADMAX closed-loop calibration pipeline.
+#
+# Every tunable of the pipeline lives in this file. Sections mirror the
+# configuration dataclasses in madmax_calibration.config field-for-field;
+# units are SI (metres, Hz, hours) except where a key name carries an
+# explicit unit suffix (_ghz, _mm). Unknown keys are rejected at load time.
+#
+# Disk configurations: one [[disk_configuration]] table per frequency
+# window, in any number. spacings_mm are the physical gaps of the 3-disk
+# prototype stack: mirror-disk1, disk1-disk2, disk2-disk3.
+# booster_antenna_distance_mm is the disk3->antenna optics path (focusing
+# mirror in between) - not a stack spacing: it does not enter the 1D boost
+# solve and parameterizes the coupling optics. The generated spacings are
+# the analytic half-wave stand-in for the offline disk optimization;
+# replace them with the real per-window optimized values.
+
+[calibration]
+objective = "scan_rate"                # scan_rate | smooth_min | peak
+n_baseline_replicates = 3
+seed = 0
+active_configuration = "window_01"
+
+[simulator]
+disk_index = 5
+disk_loss_tan = 0.002
+n_freq = 81
+# n_disks, target_frequency and window_half_width come from the active
+# [[disk_configuration]] below.
+
+[control]
+n_disk_modes = 2
+disk_mode_limit = 0.0005
+z_global_limit = 0.001
+z_mirror_limit = 0.0005
+z_focus_limit = 0.002
+max_step_normalized = 0.35
+min_gap = 0.003
+
+[antenna]
+travel_limit = 0.01
+initial_scan_step = 0.0015
+max_evaluations = 20
+noise_repeats = 1
+kappa = 2
+
+[budget]
+max_hf_measurements = 25
+max_lf_measurements = 60
+max_booster_moves = 60
+max_total_hours = 60
+
+[cost]
+hf_measurement = 1
+lf_measurement = 0.1
+antenna_alignment = 0.2
+move_base = 0.05
+move_per_normalized_distance = 0.1
+
+[trust_region]
+initial_size = 0.25
+min_size = 0.02
+max_size = 0.6
+expand_factor = 1.6
+shrink_factor = 0.5
+success_tolerance = 2
+failure_tolerance = 3
+
+[step1]
+n_candidates = 128
+lambda_info = 0.15
+soft_feasibility_threshold = 0.5
+ei_noise_factor = 0.3
+incumbent_sd_factor = 1.5
+rebaseline_after_hours = 12
+n_theta_samples = 8
+seed = 0
+
+[step5]
+prior_sd_z_offset = 0.0005
+prior_sd_compression = 0.00025
+prior_sd_log_loss = 0.7
+discrepancy_amplitude_prior = 0.05
+discrepancy_lengthscale_bounds = [0.1, 2]
+noise_inflation_prior = 0.02
+drift_rate_prior = 0.002
+min_hf_points_for_inference = 3
+prior_sensitivity_check = true
+
+[step7]
+improvement_noise_factor = 0.5
+patience = 3
+
+# Simulated-detector ground truth and instrument noise, used by the
+# example, the benchmark harness and the tests. Ignored on real hardware.
+[mock.truth]
+z_offset = 0.0008
+compression = 0.0004
+log_loss = 0.3
+beam_center = [0.0025, -0.0015]
+focus_optimum = 0.0006
+discrepancy_tilt = 0.04
+drift_rate_z = 2e-06
+
+[mock.noise]
+hf_norm_jitter = 0.01
+hf_bin_noise = 0.01
+lf_rel_noise = 0.05
+actuator_repeatability = 5e-06
+actuator_hysteresis = 1e-05
+readback_noise = 2e-06
+antenna_repeatability = 5e-05
+
+[[disk_configuration]]
+name = "window_01"
+target_frequency_ghz = 18.25
+window_half_width_ghz = 0.25
+spacings_mm = [8.2135, 8.2135, 8.2135]   # mirror-d1, d1-d2, d2-d3
+booster_antenna_distance_mm = 100
+
+[[disk_configuration]]
+name = "window_02"
+target_frequency_ghz = 18.75
+window_half_width_ghz = 0.25
+spacings_mm = [7.9945, 7.9945, 7.9945]   # mirror-d1, d1-d2, d2-d3
+booster_antenna_distance_mm = 100
+
+[[disk_configuration]]
+name = "window_03"
+target_frequency_ghz = 19.25
+window_half_width_ghz = 0.25
+spacings_mm = [7.7868, 7.7868, 7.7868]   # mirror-d1, d1-d2, d2-d3
+booster_antenna_distance_mm = 100
+
+[[disk_configuration]]
+name = "window_04"
+target_frequency_ghz = 19.75
+window_half_width_ghz = 0.25
+spacings_mm = [7.5897, 7.5897, 7.5897]   # mirror-d1, d1-d2, d2-d3
+booster_antenna_distance_mm = 100
+
+[[disk_configuration]]
+name = "window_05"
+target_frequency_ghz = 20.25
+window_half_width_ghz = 0.25
+spacings_mm = [7.4023, 7.4023, 7.4023]   # mirror-d1, d1-d2, d2-d3
+booster_antenna_distance_mm = 100
+
+[[disk_configuration]]
+name = "window_06"
+target_frequency_ghz = 20.75
+window_half_width_ghz = 0.25
+spacings_mm = [7.2239, 7.2239, 7.2239]   # mirror-d1, d1-d2, d2-d3
+booster_antenna_distance_mm = 100
+
+[[disk_configuration]]
+name = "window_07"
+target_frequency_ghz = 21.25
+window_half_width_ghz = 0.25
+spacings_mm = [7.0539, 7.0539, 7.0539]   # mirror-d1, d1-d2, d2-d3
+booster_antenna_distance_mm = 100
+
+[[disk_configuration]]
+name = "window_08"
+target_frequency_ghz = 21.75
+window_half_width_ghz = 0.25
+spacings_mm = [6.8918, 6.8918, 6.8918]   # mirror-d1, d1-d2, d2-d3
+booster_antenna_distance_mm = 100
+
+[[disk_configuration]]
+name = "window_09"
+target_frequency_ghz = 22.25
+window_half_width_ghz = 0.25
+spacings_mm = [6.7369, 6.7369, 6.7369]   # mirror-d1, d1-d2, d2-d3
+booster_antenna_distance_mm = 100
+
+[[disk_configuration]]
+name = "window_10"
+target_frequency_ghz = 22.75
+window_half_width_ghz = 0.25
+spacings_mm = [6.5888, 6.5888, 6.5888]   # mirror-d1, d1-d2, d2-d3
+booster_antenna_distance_mm = 100
+
+[[disk_configuration]]
+name = "window_11"
+target_frequency_ghz = 23.25
+window_half_width_ghz = 0.25
+spacings_mm = [6.4471, 6.4471, 6.4471]   # mirror-d1, d1-d2, d2-d3
+booster_antenna_distance_mm = 100
+
+[[disk_configuration]]
+name = "window_12"
+target_frequency_ghz = 23.75
+window_half_width_ghz = 0.25
+spacings_mm = [6.3114, 6.3114, 6.3114]   # mirror-d1, d1-d2, d2-d3
+booster_antenna_distance_mm = 100

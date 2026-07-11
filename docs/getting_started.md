@@ -37,30 +37,50 @@ pytest
 ## Run a full synthetic calibration
 
 ```bash
-python examples/run_synthetic_calibration.py        # optional: seed argument
+python examples/run_synthetic_calibration.py                       # active window
+python examples/run_synthetic_calibration.py --window window_07    # another window
 ```
 
 This runs the complete closed loop against the simulated detector
 ({class}`~madmax_calibration.hardware.MockHardware`), which hides detector
 state errors, actuator hysteresis, drift and measurement noise from the
-algorithm. A detailed narrative of what happens during this run is in
-{doc}`example_walkthrough`.
+algorithm. **Everything is driven by the settings file**
+(`settings/prototype.toml`): the disk configurations — three spacings plus
+a booster–antenna distance per frequency window — the budgets, the
+acquisition constants, and the mock detector's hidden errors. A detailed
+narrative of what happens during this run is in {doc}`example_walkthrough`;
+the file format is documented in {doc}`user_guide/configuration`.
+
+Generate a settings file for a different campaign (any frequency range,
+any number of windows) and benchmark pipeline variants against each other:
+
+```bash
+python examples/generate_settings.py -o settings/my_campaign.toml \
+    --f-min 18 --f-max 24 --windows 12
+python -m madmax_calibration.benchmark settings/prototype.toml \
+    settings/my_campaign.toml --runs 3
+```
 
 ## Minimal programmatic use
 
-The convenience factory builds the whole stack (nominal geometry →
+The settings-based factory builds the whole stack (nominal geometry →
 control map → simulator → mock hardware → loop):
 
 ```python
-from madmax_calibration.loop import build_default_loop
+from madmax_calibration.loop import build_loop_from_settings
+from madmax_calibration.settings import load_settings
 
-loop = build_default_loop(seed=0)
+settings = load_settings("settings/prototype.toml")
+loop = build_loop_from_settings(settings, seed=0)
 result = loop.run(max_iterations=20, verbose=True)
 
 print(result.feasibility_report["improvement_over_noise"])
 print(result.u_B_star)           # best validated booster correction [m]
 print(result.step5.theta_map)    # inferred detector-state parameters
 ```
+
+(`build_default_loop(seed=0)` remains as a shorthand: it uses the
+repository settings file when present.)
 
 Assembling the pieces explicitly — which is what you will do when
 substituting the real simulator and detector control — looks like this:
