@@ -50,6 +50,7 @@ class ControlConfig:
       mode 0: uniform inter-disk gap change (stack expansion/compression)
       mode 1: linear gradient in inter-disk gaps
       mode 2: quadratic gap profile
+
     Only ``n_disk_modes`` of these are active.
     """
 
