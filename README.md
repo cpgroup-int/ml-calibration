@@ -2,7 +2,7 @@
 
 Implementation of the seven-step closed-loop calibration algorithm for the
 MADMAX detector described in
-[`docs/madmax_closed_loop_calibration_proposal.md`](docs/madmax_closed_loop_calibration_proposal.md)
+[`docs/design/madmax_closed_loop_calibration_proposal.md`](docs/design/madmax_closed_loop_calibration_proposal.md)
 (version 3) and its step-specific technical design notes.
 
 The system starts from an already-optimized nominal disk configuration,
@@ -72,11 +72,26 @@ substitute the real MADMAX simulator behind the `BoostSimulator` interface
 (`beta2`, `predict_J`).  Nothing else in the package knows about the mock.
 
 Before that, read
-[`docs/DESIGN_DECISIONS.md`](docs/DESIGN_DECISIONS.md): it lists every
+[`docs/design/DESIGN_DECISIONS.md`](docs/design/DESIGN_DECISIONS.md): it lists every
 default that stands in for a decision the design notes defer to the MADMAX
 team (control basis, hard limits, objective choice, fidelities, budgets),
 and what is deliberately not implemented yet (multi-objective/Pareto,
 curve-level inference, full Bayesian sampling).
+
+## Documentation
+
+Extensive Sphinx documentation lives in `docs/` — getting-started and an
+annotated example walkthrough, a user guide (architecture, configuration
+reference, physics and statistics references, safety model, hardware
+integration), one detailed page per algorithm step, a validation matrix
+mapping the design-note checklists to tests, the full API reference, and
+the original design documents rendered with working math.
+
+```bash
+pip install -r docs/requirements.txt
+sphinx-build -b html docs docs/_build/html
+# open docs/_build/html/index.html
+```
 
 ## Safety model
 

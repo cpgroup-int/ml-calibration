@@ -6,3 +6,4 @@ calibration_history.json
 dist/
 build/
 .venv/
+docs/_build/

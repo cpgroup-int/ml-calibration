@@ -16,6 +16,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=7"]
+docs = ["sphinx>=7", "furo", "myst-parser", "sphinx-copybutton"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
