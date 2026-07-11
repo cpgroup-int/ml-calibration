@@ -146,6 +146,11 @@ class BoostSimulator:
     # Antenna-coupling model parameters (assumed known to the simulator).
     beam_width: float = 4e-3         # Gaussian beam width [m]
     focus_curvature: float = 2e5     # coupling loss per m^2 of focus offset
+    # Nominal disk3 -> antenna optics path (focusing mirror in between).
+    # Not a stack spacing: the 1D solve treats the region behind the last
+    # disk with a radiation condition, so this does not change beta^2; it
+    # anchors the coupling optics and is carried to the hardware layer.
+    booster_antenna_distance: float = 0.10
 
     def __post_init__(self) -> None:
         self._freqs = self.cfg.frequency_grid()

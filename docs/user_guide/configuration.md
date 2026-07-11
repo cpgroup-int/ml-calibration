@@ -1,9 +1,74 @@
 # Configuration reference
 
 All tunables live in {class}`~madmax_calibration.config.CalibrationConfig`,
-a tree of dataclasses. Units are **metres, Hz and hours** throughout.
-Fields marked ⚠ are stand-ins for decisions the design notes defer to the
-MADMAX team (see {doc}`../design/DESIGN_DECISIONS`).
+a tree of dataclasses — and every one of them can be set from a **TOML
+settings file**, which is the recommended interface. Units are **metres,
+Hz and hours** throughout. Fields marked ⚠ are stand-ins for decisions
+the design notes defer to the MADMAX team (see
+{doc}`../design/DESIGN_DECISIONS`).
+
+## The settings file
+
+The repository ships `settings/prototype.toml`; nothing about the
+campaign is hard-coded — the frequency range and the number of windows
+are whatever the file says. Load and run with:
+
+```python
+from madmax_calibration.settings import load_settings
+from madmax_calibration.loop import build_loop_from_settings
+
+settings = load_settings("settings/prototype.toml")
+loop = build_loop_from_settings(settings, window="window_07", seed=0)
+result = loop.run(max_iterations=20)
+```
+
+File layout ({mod}`madmax_calibration.settings`):
+
+- `[calibration]` — objective, baseline replicates, seed, and the
+  `active_configuration` (the window calibrated by default);
+- `[simulator]`, `[control]`, `[antenna]`, `[budget]`, `[cost]`,
+  `[trust_region]`, `[step1]`, `[step5]`, `[step7]` — mirror the
+  dataclasses below field-for-field (SI units). Unknown keys are
+  **rejected at load time**, so typos fail loudly;
+- `[mock.truth]` / `[mock.noise]` — the simulated detector's hidden
+  errors and instrument noise (examples, benchmarks and tests only;
+  ignored on real hardware);
+- any number of `[[disk_configuration]]` tables — one per frequency
+  window.
+
+Each disk configuration defines the nominal detector state `q0(W)` for
+one window:
+
+```toml
+[[disk_configuration]]
+name = "window_07"
+target_frequency_ghz = 21.25
+window_half_width_ghz = 0.25
+spacings_mm = [7.0539, 7.0539, 7.0539]   # mirror-d1, d1-d2, d2-d3
+booster_antenna_distance_mm = 100
+# disk_thickness_mm = 1.4108             # optional; default: half-wave
+```
+
+`spacings_mm` are the three physical gaps of the 3-disk prototype stack
+(mirror–disk1, disk1–disk2, disk2–disk3). The
+`booster_antenna_distance_mm` (disk3 → antenna, focusing mirror in
+between) is deliberately **not** a stack spacing: the 1D solver treats
+the region behind the last disk with a radiation condition, so it does
+not change the boost curve; it parameterizes the coupling optics and is
+carried through to the hardware layer.
+
+Generate a complete file for an arbitrary campaign (the spacings are the
+analytic half-wave stand-in for the offline disk optimization — replace
+them with the real per-window values):
+
+```bash
+python examples/generate_settings.py -o settings/my_campaign.toml \
+    --f-min 18 --f-max 24 --windows 12 --disks 3
+```
+
+## Programmatic configuration
+
+The dataclasses remain available directly when scripting:
 
 ```python
 from madmax_calibration.config import CalibrationConfig
@@ -25,7 +90,7 @@ cfg.step1.lambda_info = 0.3
 
 | Field | Default | Meaning |
 |---|---|---|
-| `n_disks` ⚠ | 5 | Number of dielectric disks in the 1D stack. |
+| `n_disks` ⚠ | 3 | Number of dielectric disks in the 1D stack (MADMAX prototype). Derived from the active disk configuration when a settings file is used. |
 | `disk_index` | 5.0 | Refractive index (LaAlO₃-like). |
 | `disk_loss_tan` | 2e-3 | Nominal dielectric loss tangent; scaled by $e^{\theta_{\log loss}}$. |
 | `target_frequency` | 22 GHz | Centre of the target window $W$. |

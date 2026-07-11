@@ -1,28 +1,48 @@
 """Run the full closed-loop calibration against the simulated detector.
 
-The mock detector hides detector-state errors (stack offset +0.6 mm, gap
-compression +0.25 mm, extra dielectric loss), a mis-centred antenna beam,
-a mis-focused mirror, actuator hysteresis, slow drift and measurement
-noise.  The loop starts from the degraded nominal configuration and must
-find a validated improvement within budget.
+All parameters — including the disk configurations (three spacings plus
+booster-antenna distance per frequency window) and the simulated
+detector's hidden errors — come from a TOML settings file.
 
-Usage:  python examples/run_synthetic_calibration.py [seed]
+Usage:
+    python examples/run_synthetic_calibration.py [--settings PATH]
+        [--window NAME] [--seed N]
 """
 
+import argparse
 import json
-import sys
 import time
 
 import numpy as np
 
-from madmax_calibration.loop import build_default_loop
+from madmax_calibration.loop import build_loop_from_settings
+from madmax_calibration.settings import default_settings_path, load_settings
 
 
 def main() -> None:
-    seed = int(sys.argv[1]) if len(sys.argv) > 1 else 0
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--settings", default=None,
+                        help="settings TOML file (default: settings/prototype.toml)")
+    parser.add_argument("--window", default=None,
+                        help="disk-configuration name (default: file's active one)")
+    parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--iterations", type=int, default=20)
+    args = parser.parse_args()
+
+    path = args.settings or default_settings_path()
+    if path is None:
+        raise SystemExit("no settings file found; pass --settings or create settings/prototype.toml")
+    settings = load_settings(path)
+    window = settings.disk_configuration(args.window)
+    print(f"settings: {path}")
+    print(f"window:   {window.name} @ {window.target_frequency / 1e9:.2f} GHz "
+          f"(+/- {window.window_half_width / 1e9:.2f} GHz), "
+          f"spacings {np.round(window.spacings * 1e3, 3)} mm, "
+          f"booster-antenna distance {window.booster_antenna_distance * 1e3:.0f} mm")
+
     t0 = time.time()
-    loop = build_default_loop(seed=seed)
-    result = loop.run(max_iterations=20, verbose=True)
+    loop = build_loop_from_settings(settings, window=args.window, seed=args.seed)
+    result = loop.run(max_iterations=args.iterations, verbose=True)
 
     print("\n================ feasibility report ================")
     for key, value in result.feasibility_report.items():

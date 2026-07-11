@@ -85,12 +85,15 @@ validated improvements, shrink ×0.5 after 3 consecutive failures, bounds
 ## 10. Simulator stand-in  ⚠
 
 `BoostSimulator` is a 1D transfer-matrix dielectric-haloscope model
-(mirror + N disks, axion source term, complex-index losses) with 5 disks
-by default — qualitatively faithful (transparent-mode boost matches the
-analytic 1 + 2N(1−1/n²); µm-scale spacing sensitivity; loss effects) but
-**not** the real MADMAX simulation.  The rest of the package only touches
-it through `predict_J` / `beta2`, so the real simulator can be substituted
-behind the same interface.
+(mirror + N disks, axion source term, complex-index losses) with 3 disks
+by default (the MADMAX prototype stack) — qualitatively faithful
+(transparent-mode boost matches the analytic 1 + 2N(1−1/n²); µm-scale
+spacing sensitivity; loss effects) but **not** the real MADMAX
+simulation.  The nominal per-window disk spacings and the
+booster–antenna distance come from the settings file
+(`settings/prototype.toml`); the rest of the package only touches the
+simulator through `predict_J` / `beta2`, so the real simulator can be
+substituted behind the same interface.
 
 ## 11. Step-5 inference level
 

@@ -67,15 +67,16 @@ Two closed-form results anchor the implementation (both are enforced by
 
 ### Sensitivity scales
 
-With the default 5-disk, $n = 5$ stack at 22 GHz ($\lambda/2 \approx
-6.8$ mm gaps), the objective responds to geometry errors at the
-several-hundred-µm scale:
+With the prototype 3-disk, $n = 5$ stack at 21 GHz ($\lambda/2 \approx
+7.1$ mm gaps), the objective responds to geometry errors at the
+several-hundred-µm scale (sensitivity grows toward the upper end of the
+18–24 GHz range as the gaps shrink):
 
 | Error | Effect on $J_{\text{scan}}$ |
 |---|---|
-| stack offset $+0.6$ mm | ≈ −9% |
-| gap compression $+0.25$ mm | ≈ −30% |
-| both together | ≈ −40% |
+| stack offset $+0.8$ mm, gap compression $+0.4$ mm | ≈ −40% |
+| same magnitudes, opposite compression sign | ≈ −7% |
+| stack offset $+0.6$ mm, gap compression $+0.3$ mm | ≈ −23% |
 | loss scale $e^{1}$ | few % |
 
 Note that error *combinations* matter: some $(\theta_z, \theta_c)$ pairs

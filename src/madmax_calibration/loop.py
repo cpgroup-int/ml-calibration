@@ -336,12 +336,54 @@ class CalibrationLoop:
         )
 
 
-def build_default_loop(seed: int = 0, config: CalibrationConfig | None = None):
-    """Convenience factory: nominal geometry + simulator + mock hardware."""
+def build_loop_from_settings(
+    settings,
+    window: str | None = None,
+    seed: int = 0,
+) -> CalibrationLoop:
+    """Build a mock-hardware calibration loop from a Settings bundle.
+
+    ``window`` selects the disk configuration (default: the settings
+    file's active one).  The nominal geometry is the configuration's
+    physical spacings; the simulator's frequency window follows it.
+    """
     from .hardware import MockHardware
+
+    d = settings.disk_configuration(window)
+    sim_cfg = settings.simulator_config_for(d.name)
+    config = settings.config
+    config.simulator = sim_cfg
+    thicknesses = np.full(d.n_disks, d.thickness(sim_cfg.disk_index))
+    control_map = ControlMap(config.control, sim_cfg, d.spacings, thicknesses)
+    simulator = BoostSimulator(
+        sim_cfg, control_map, booster_antenna_distance=d.booster_antenna_distance
+    )
+    hardware = MockHardware(
+        simulator,
+        config,
+        truth=settings.mock_truth,
+        noise=settings.mock_noise,
+        seed=seed + 1000,
+    )
+    return CalibrationLoop(hardware, simulator, config)
+
+
+def build_default_loop(seed: int = 0, config: CalibrationConfig | None = None):
+    """Convenience factory: nominal geometry + simulator + mock hardware.
+
+    Uses the repository settings file (``settings/prototype.toml``) when
+    present and no explicit config is given; otherwise falls back to the
+    programmatic defaults with analytic half-wave nominal spacings.
+    """
+    from .hardware import MockHardware
+    from .settings import default_settings_path, load_settings
     from .simulator import nominal_half_wave_geometry
 
-    config = config or CalibrationConfig()
+    if config is None:
+        path = default_settings_path()
+        if path is not None:
+            return build_loop_from_settings(load_settings(path), seed=seed)
+        config = CalibrationConfig()
     gaps, thick = nominal_half_wave_geometry(config.simulator)
     control_map = ControlMap(config.control, config.simulator, gaps, thick)
     simulator = BoostSimulator(config.simulator, control_map)

@@ -55,6 +55,14 @@ pytest                                      # validation suite (~3 min)
 python examples/run_synthetic_calibration.py
 ```
 
+Every parameter of the pipeline — including the per-window disk
+configurations of the 3-disk prototype (three spacings: mirror–disk1,
+disk1–disk2, disk2–disk3, plus a booster–antenna distance) — lives in a
+TOML settings file, `settings/prototype.toml`. Nothing about the campaign
+is hard-coded: generate a file for any frequency range and window count
+with `python examples/generate_settings.py`, and A/B-benchmark pipeline
+variants with `python -m madmax_calibration.benchmark <settings...>`.
+
 The example runs the loop against the simulated detector, which hides a
 +0.6 mm stack offset, +0.25 mm gap-compression error, extra dielectric
 loss, a mis-centred antenna beam, a mis-focused mirror, actuator

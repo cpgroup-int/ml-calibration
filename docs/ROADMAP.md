@@ -42,31 +42,43 @@ These facts anchor the priorities and scope:
 
 Small enabling items; everything later is measured against these.
 
-### 0.1 Align defaults with the prototype  *(effort: S)*
+### 0.1 Align defaults with the prototype  *(effort: S)* — ✅ implemented
 
 - Set `SimulatorConfig.n_disks = 3` as the default and re-tune the mock
   truth/limits so the synthetic problem stays meaningfully hard.
-- Parameterize the target window over the real campaign grid: ~12
-  windows spanning 18–24 GHz (≈0.5 GHz each), with the per-window
-  nominal configuration `q0(W)` supplied as input.
-- Acceptance: test suite green on the 3-disk defaults; example run
-  reproduces a statistically significant improvement.
+- Parameterize the campaign through a **settings file** rather than a
+  fixed grid: `settings/prototype.toml` defines any number of
+  `[[disk_configuration]]` tables (per window: the three prototype
+  spacings mirror–d1, d1–d2, d2–d3 in mm, the booster–antenna distance,
+  and the target window), plus every other pipeline parameter. The
+  shipped default covers 12 windows over 18–24 GHz, but neither number
+  is fixed — `examples/generate_settings.py` writes a file for any
+  range/window count, and `madmax_calibration.settings.load_settings`
+  rejects unknown keys loudly.
+- Acceptance met: test suite green on the 3-disk defaults (including
+  settings round-trip tests); the settings-driven example reproduces a
+  statistically significant improvement (~12σ at seed 0, window 1).
 
-### 0.2 A/B benchmark harness  *(effort: M)*
+### 0.2 A/B benchmark harness  *(effort: M)* — ✅ implemented
 
 Every algorithmic change in this roadmap must be judged on the same
-footing. Build a small benchmark runner that executes the loop over an
-ensemble of mock truths and seeds and reports:
+footing. `madmax_calibration.benchmark` executes the loop over an
+ensemble of seeds (optionally jittering the mock truth) and reports:
 
 - HF measurements (and total hours) to reach within measurement noise
-  of the achievable optimum,
+  of the achievable optimum (computed analytically from the mock truth),
 - final validated improvement and its significance,
-- posterior calibration of the Step-6 predictions (empirical coverage),
+- posterior calibration of the Step-6 predictions (2σ coverage, RMS
+  standardized residual),
 - safety and budget compliance (must always be 100%).
 
-Acceptance: one command produces a comparison table between two
-pipeline configurations. All subsequent phases cite this harness in
-their acceptance criteria.
+Acceptance met: one command compares any number of settings files —
+
+```bash
+python -m madmax_calibration.benchmark settings/a.toml settings/b.toml --runs 5
+```
+
+All subsequent phases cite this harness in their acceptance criteria.
 
 ---
 

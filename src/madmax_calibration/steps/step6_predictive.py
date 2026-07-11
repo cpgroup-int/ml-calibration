@@ -180,6 +180,7 @@ def run_step6(
     model.validation = {
         "rms_standardized_residual": rms_z,
         "max_abs_standardized_residual": float(np.max(np.abs(z))),
+        "coverage_2sigma": float(np.mean(np.abs(z) <= 2.0)),
         "overconfident": bool(rms_z > 2.0),
         "underconfident": bool(rms_z < 0.2 and len(z) > 4),
         "n_points": len(z),

@@ -21,7 +21,7 @@ C_LIGHT = 299_792_458.0  # m/s
 class SimulatorConfig:
     """Fast 1D physics simulator settings (parent proposal, section 2.3)."""
 
-    n_disks: int = 5
+    n_disks: int = 3                 # MADMAX prototype: 3 disks + mirror
     disk_index: float = 5.0          # LaAlO3-like refractive index
     disk_loss_tan: float = 2e-3      # nominal dielectric loss tangent
     target_frequency: float = 22e9   # centre of the target window W [Hz]
