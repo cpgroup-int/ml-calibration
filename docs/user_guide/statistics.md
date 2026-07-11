@@ -9,68 +9,87 @@ afterwards on a leftover residual.
 
 ## The observation model
 
-Every valid high-fidelity measurement $i$ contributes
+Every valid high-fidelity measurement $i$ contributes a vector of curve
+summaries $z_i$ (roadmap Phase 1.1; Step 5 design §4.2). Component by
+component $k$:
 
 $$
-J_i \;=\; J_{\mathrm{sim}}(\tilde u_i, \theta)
-\;+\; r(\tilde u_i)
-\;+\; d\,(t_i - t_{\mathrm{ref}})
-\;+\; \epsilon_i,
+z_{i,k} \;=\; z_{\mathrm{sim},k}(\tilde u_i, \theta)
+\;+\; r_k(\tilde u_i)
+\;+\; [k{=}J]\; d\,(t_i - t_{\mathrm{ref}})
+\;+\; \epsilon_{i,k},
 \qquad
-\epsilon_i \sim \mathcal N\!\bigl(0,\; \sigma_i^2 + s_{\mathrm{extra}}^2\bigr)
+\epsilon_{i,k} \sim \mathcal N\!\bigl(0,\; \sigma_{i,k}^2 + (s\,\bar\sigma_k)^2\bigr)
 $$
 
 with
 
+- $z = (J,\ \log\text{peak},\ \text{band centroid},\ \text{bandwidth},\
+  \text{flatness})$ — smooth, physically meaningful summaries of
+  $\beta^2(\nu)$ ({class}`~madmax_calibration.summaries.CurveSummarizer`;
+  component 0 is the scalar objective). A frequency shift, an amplitude
+  loss and a bandwidth change — indistinguishable at scalar level — now
+  constrain $\theta$ separately, which is what breaks the detector-state
+  degeneracies;
 - $\tilde u_i$ — the **achieved** geometry (readback), never the commanded
   one (parent proposal §2.5);
-- $J_{\mathrm{sim}}(u, \theta)$ — the fast simulator pushed through the
-  scalar objective ({meth}`~madmax_calibration.simulator.BoostSimulator.predict_J`);
+- $z_{\mathrm{sim}}(u, \theta)$ — the fast simulator pushed through the
+  summarizer ({meth}`~madmax_calibration.simulator.BoostSimulator.predict_summaries`);
 - $\theta = (\theta_z, \theta_c, \theta_{\log loss})$ — physically
   interpretable detector-state parameters
   ({class}`~madmax_calibration.simulator.DetectorState`);
-- $r(\cdot) \sim \mathcal{GP}(0, k_{\mathrm{RBF}})$ — the systematic
-  simulator–measurement discrepancy, defined over *normalized* control
-  space;
-- $d$ — a linear drift rate in $J$ per hour (minimal drift model, Step 5
-  design §11.2);
-- $\sigma_i$ — the Step-4 propagated measurement uncertainty;
-- $s_{\mathrm{extra}}$ — a jointly inferred noise-inflation term guarding
-  against optimistic $\sigma_i$.
+- $r_k(\cdot) \sim \mathcal{GP}(0, k_{\mathrm{RBF}})$ — one systematic
+  simulator–measurement discrepancy GP per component, over *normalized*
+  control space;
+- $d$ — a linear drift rate acting on the objective component (minimal
+  drift model, Step 5 design §11.2);
+- $\sigma_{i,k}$ — the Step-4 Monte-Carlo-propagated summary
+  uncertainties (cross-component correlations neglected at Level A —
+  a documented approximation);
+- $s$ — one shared, dimensionless noise-inflation factor, scaled per
+  component by the typical measurement sigma $\bar\sigma_k$.
 
-This is the scalar-objective observation level (Step 5 design §4.1) — the
-recommended first implementation. Curve-summary and curve-level inference
-(§4.2–4.3) are future extensions; the measurement records already preserve
-the full curves they would need.
+`Step5Config.observation_level = "scalar"` selects the pre-Phase-1.1
+single-component special case ($z = (J)$) — retained so the benchmark
+harness can A/B the two levels. Records lacking summaries trigger an
+automatic, diagnosed fallback to scalar level. Full curve-level inference
+(§4.3) remains a future extension; the records preserve the curves it
+would need.
 
 ## Joint MAP inference (Level A)
 
 {func}`~madmax_calibration.steps.step5_inference.run_step5` maximizes the
-log posterior over $(\theta, d, s_{\mathrm{extra}})$ **with the
-discrepancy GP marginalized analytically**: for fixed parameters, the
-residuals $e_i = J_i - J_{\mathrm{sim}}(\tilde u_i,\theta) - d\,\Delta t_i$
-have the GP marginal likelihood
+log posterior over $(\theta, d, s)$ **with every discrepancy GP
+marginalized analytically**: for fixed parameters, each component's
+residuals $e_{i,k} = z_{i,k} - z_{\mathrm{sim},k}(\tilde u_i,\theta) -
+[k{=}J]\,d\,\Delta t_i$ contribute the GP marginal likelihood
 
 $$
-\log p(e \mid \theta, d, s) =
--\tfrac12 e^\top K_e^{-1} e - \tfrac12 \log |K_e| - \tfrac{n}{2}\log 2\pi,
+\log p(e_k \mid \theta, d, s) =
+-\tfrac12 e_k^\top K_k^{-1} e_k - \tfrac12 \log |K_k| - \tfrac{n}{2}\log 2\pi,
 \qquad
-K_e = K_{\mathrm{RBF}} + \mathrm{diag}(\sigma_i^2 + s^2),
+K_k = K_{\mathrm{RBF},k} + \mathrm{diag}\bigl(\sigma_{i,k}^2 + (s\bar\sigma_k)^2\bigr),
 $$
 
-so the discrepancy is *inside* the objective during $\theta$-inference,
-not a post-hoc fit. Priors:
+summed over components — so the discrepancy channels are *inside* the
+objective during $\theta$-inference, never a post-hoc fit. Priors:
 
 - $\theta \sim \mathcal N(0, \mathrm{diag}(\text{prior sd}^2))$ — the
   informative priors of Step 5 design §15.1 (mechanical tolerances etc.);
 - $d \sim \mathcal N(0, \text{drift prior}^2)$;
-- $s_{\mathrm{extra}}$, GP amplitude — half-normal (the amplitude prior is
-  what stops the discrepancy from absorbing the physics, §9.3).
+- $s$, GP amplitudes — half-normal. Each component's amplitude prior
+  scales with its response magnitude **and is floored at a few
+  measurement sigmas** (`discrepancy_sigma_floor`): unmodelled
+  systematics — e.g. a receiver-chain tilt that shifts the band
+  centroid — must have an affordable home in the discrepancy channel,
+  otherwise the fit buys the same explanation with a biased $\theta$
+  (the confounding mechanism of §9.3, observed directly in the
+  benchmark before the floor was introduced).
 
 The optimization alternates two rounds of (a) L-BFGS over
-$(\theta, d, \log s)$ given GP hyperparameters and (b) penalized ML-II
-refit of the GP amplitude/lengthscale on the residuals — with warm starts
-from the previous iteration's posterior state.
+$(\theta, d, \log s)$ given all GP hyperparameters and (b) penalized
+ML-II refit of each component's amplitude/lengthscale on its residuals —
+with warm starts from the previous iteration's posterior state.
 
 ### Laplace uncertainty
 

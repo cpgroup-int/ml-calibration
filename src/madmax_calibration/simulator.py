@@ -215,6 +215,15 @@ class BoostSimulator:
         curve = self.beta2(u_B, theta) * self.aligned_coupling(u_B, theta)
         return float(objective(curve))
 
+    def predict_summaries(self, u_B: np.ndarray, theta: DetectorState, summarizer) -> np.ndarray:
+        """Antenna-aligned curve-summary vector z_sim(u_B, theta).
+
+        Same plug-in-antenna convention as :meth:`predict_J`; component 0
+        of the returned vector is the scalar objective.
+        """
+        curve = self.beta2(u_B, theta) * self.aligned_coupling(u_B, theta)
+        return summarizer(curve)
+
 
 def nominal_half_wave_geometry(cfg: SimulatorConfig) -> tuple[np.ndarray, np.ndarray]:
     """Analytic transparent-mode seed: half-wave gaps and disks.

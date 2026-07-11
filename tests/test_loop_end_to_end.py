@@ -36,10 +36,15 @@ def test_loop_finds_validated_improvement(result_and_loop):
     assert result.J_best > result.J_baseline, (
         f"no improvement: J_best={result.J_best:.4f} vs J0={result.J_baseline:.4f}"
     )
-    # The correction direction must match the hidden truth: the truth has a
-    # positive stack z-offset, so the correction must move z_global down.
-    n = loop.config.control.n_disk_modes
-    assert result.u_B_star[n] < 0
+    # The correction direction must match the hidden truth in *geometry*
+    # terms (control parameterizations are degenerate: mirror, global-z
+    # and disk modes can trade against each other). The truth has a
+    # positive stack offset and positive gap compression, so the net
+    # correction must shrink the mirror gap and the inter-disk gaps.
+    gaps_corrected = loop.control_map.geometry(result.u_B_star).gaps
+    delta = gaps_corrected - loop.control_map.nominal_gaps
+    assert delta[0] < 0, f"mirror-gap correction has wrong sign: {delta}"
+    assert np.mean(delta[1:]) < 0, f"inter-gap correction has wrong sign: {delta}"
 
 
 def test_loop_never_violates_hard_constraints(result_and_loop):

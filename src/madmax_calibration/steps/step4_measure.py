@@ -32,8 +32,15 @@ def run_step4(
     replicate_group: str | None = None,
     baseline_or_incumbent: str | None = None,
     rng: np.random.Generator | None = None,
+    summarizer=None,
 ) -> MeasurementRecord:
-    """Execute the measurement selected by Step 1 and return the record."""
+    """Execute the measurement selected by Step 1 and return the record.
+
+    When a :class:`~madmax_calibration.summaries.CurveSummarizer` is
+    supplied, HF records additionally carry the curve-summary vector and
+    its Monte-Carlo uncertainty (component 0 is the scalar objective, so
+    J and sigma_J come from the same propagation).
+    """
     rng = rng or np.random.default_rng(0)
     flags = list(pre_flags or [])
     t_start = hardware.now
@@ -76,7 +83,13 @@ def run_step4(
             return record
         record.beta2_curve = curve
         record.beta2_sigma = curve_sigma
-        j, sigma_j = objective.with_uncertainty(curve, curve_sigma, rng=rng)
+        if summarizer is not None:
+            z, sigma_z = summarizer.with_uncertainty(curve, curve_sigma, rng=rng)
+            record.summaries = z
+            record.summaries_sigma = sigma_z
+            j, sigma_j = float(z[0]), float(sigma_z[0])
+        else:
+            j, sigma_j = objective.with_uncertainty(curve, curve_sigma, rng=rng)
         record.J = j
         record.sigma_J = sigma_j
         # Signal-quality check (section 10.3).

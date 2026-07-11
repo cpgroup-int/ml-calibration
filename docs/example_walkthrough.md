@@ -58,16 +58,21 @@ condition of the parent proposal, section 7).
 ## Phase 2 — exploration under the trust region
 
 ```text
-[iter 1] action=new_candidate reason=EI 0.089 > 0.3 x HF noise 0.0028; regime: strong extrapolation
+[iter 1] action=new_candidate reason=EI 0.083 > 0.3 x HF noise 0.0028; regime: strong extrapolation
 [iter 2] action=new_candidate ...
 ...
-[iter 4] action=rebaseline reason=stale model state (4.0 h since last baseline/incumbent HF; drift scale 0.0118 vs noise 0.0029)
+[iter 4] action=rebaseline reason=stale model state (4.0 h since last baseline/incumbent HF; drift scale 0.0073 vs noise 0.0034)
 ```
 
 Each iteration:
 
 1. **Step 5** re-fits the joint model — detector state $\theta$,
-   discrepancy GP, noise inflation, drift rate — on all valid HF data.
+   per-summary discrepancy GPs, noise inflation, drift rate — on all
+   valid HF data. Each HF record contributes its *curve-summary vector*
+   (J, log peak, band centroid, bandwidth, flatness), so frequency
+   shifts, amplitude losses and bandwidth changes constrain $\theta$
+   separately (roadmap Phase 1.1; the scalar-only level remains
+   available via `observation_level = "scalar"`).
 2. **Step 6** rebuilds the posterior predictive $p(J_{\mathrm{HF}}(u)\mid D)$
    by pushing Laplace posterior samples of $\theta$ through the simulator
    and adding the discrepancy GP.
@@ -106,7 +111,7 @@ After `patience` (default 3) consecutive iterations without resolvable
 improvement, Step 7 stops the loop:
 
 ```text
-stop_reason: expected improvement below 0.5 x HF noise (0.0033) for 3 consecutive iterations
+stop_reason: expected improvement below 0.5 x HF noise (0.0035) for 3 consecutive iterations
 ```
 
 ## Phase 4 — final validation and report
@@ -118,8 +123,8 @@ run:
 
 ```text
 J_baseline: 0.1297              sigma_J_baseline: 0.0028
-J_best_validated: 0.1796        sigma_J_best: 0.0029
-improvement: 0.0499             improvement_over_noise: 12.5
+J_best_validated: 0.1904        sigma_J_best: 0.0028
+improvement: 0.0607             improvement_over_noise: 15.3
 improvement_significant: True
 n_hf_measurements: 12           n_lf_measurements: 3
 total_cost_hours: 16.2
@@ -128,12 +133,12 @@ total_cost_hours: 16.2
 and the detector-state inference:
 
 ```text
-z_offset     truth=+8.0e-04  estimate=+1.06e-03 +/- 2.1e-04  [correctable, ok]
-compression  truth=+4.0e-04  estimate=+2.21e-04 +/- 1.5e-04  [correctable, ok]
-log_loss     truth=+3.0e-01  estimate=-3.6e-01  +/- 6.0e-01  [diagnostic, ok]
+z_offset     truth=+8.0e-04  estimate=+1.16e-03 +/- 1.2e-04  [correctable, weak]
+compression  truth=+4.0e-04  estimate=+2.67e-04 +/- 9.3e-05  [correctable, ok]
+log_loss     truth=+3.0e-01  estimate=+1.35e+00 +/- 2.9e-02  [diagnostic, ok]
 ```
 
-Two things are worth reading carefully here:
+Three things are worth reading carefully here:
 
 - **The correction, not the parameters, is the deliverable.** The
   estimated $(\theta_z, \theta_c)$ pair differs from the truth along a
@@ -141,13 +146,20 @@ Two things are worth reading carefully here:
   be traded against gap compression and the mirror correction; the final
   correction here indeed uses a mirror move as part of the compensation).
   The MAP landed on an *equivalent* explanation — and the proposed
-  correction `u_B*` compensates the real errors regardless. This is
-  exactly the $\theta$/discrepancy confounding the Step-5 design note
-  warns about, and why diagnostic labels and identifiability flags are
-  attached instead of claiming unique physical values.
-- **`log_loss` is diagnostic-only** — its posterior is wide (the
-  transparent-mode objective is barely sensitive to loss) and no control
-  direction is spanned by it, so the optimizer never "chases" it.
+  correction `u_B*` compensates the real errors regardless.
+- **The `weak` flag on `z_offset` is the system being honest.** The mock
+  detector's unmodelled systematics (the receiver-chain tilt, the focus
+  offset) can masquerade as a stack offset; the prior-sensitivity check
+  detects that the estimate moves when the discrepancy priors are
+  widened and says so, instead of presenting a biased value with false
+  confidence. Removing this residual confounding is precisely what the
+  roadmap's Phase 2 (misspecification-robust amortized inference) and
+  Phase 4.1 (drift on $\theta$) target.
+- **`log_loss` is diagnostic-only** — with the curve summaries it is
+  now *identifiable* (the amplitude-carrying summaries constrain it),
+  but here it absorbs the focus-coupling amplitude deficit on top of
+  the true dielectric loss. No control direction is spanned by it, so
+  the optimizer never "chases" it either way.
 
 ## The history file
 

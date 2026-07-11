@@ -12,14 +12,25 @@ $$
 The full mathematical treatment is in {doc}`../user_guide/statistics`;
 this page covers the procedural side.
 
-## Inference level
+## Inference and observation levels
 
 The implementation is **Level A** of the design (§13.1): a *joint* MAP fit
-in which the discrepancy GP is marginalized analytically inside the
+in which every discrepancy GP is marginalized analytically inside the
 objective — so $\theta$ is never estimated without the discrepancy channel
 present — plus a Laplace approximation for uncertainty. Levels B/C
 (partial/full posterior sampling) are future upgrades behind the same
 {class}`~madmax_calibration.steps.step5_inference.Step5Result` interface.
+
+The **observation level** (design §4) is selected by
+`Step5Config.observation_level`. The default is the **curve-summary
+level** (§4.2, roadmap Phase 1.1): each HF measurement contributes the
+vector (J, log peak, band centroid, bandwidth, flatness) produced by
+{class}`~madmax_calibration.summaries.CurveSummarizer`, with one
+discrepancy GP per component — so frequency shifts, amplitude losses and
+bandwidth changes constrain $\theta$ separately instead of collapsing
+into one scalar. `"scalar"` selects the single-component special case
+(kept for A/B benchmarking); records lacking summaries trigger a
+diagnosed automatic fallback to it.
 
 ## Update routine
 
@@ -29,11 +40,13 @@ Following the design's §14:
    `usable_for_inference()` (valid, not measurement-failed) enter the
    fit; at least `min_hf_points_for_inference` HF points are required.
    Excluded records stay in the dataset with reasons.
-2. **Joint MAP** over standardized $(\theta, d, \log s_{\mathrm{extra}})$
+2. **Joint MAP** over standardized $(\theta, d, \log s)$
    with Gaussian/half-normal priors, alternating with a penalized ML-II
-   refit of the discrepancy-GP hyperparameters (two rounds; warm-started
-   from the previous iteration's state, so later updates converge in a
-   few steps).
+   refit of each component's discrepancy-GP hyperparameters (two rounds;
+   warm-started from the previous iteration's state, so later updates
+   converge in a few steps). Each amplitude prior is floored at
+   `discrepancy_sigma_floor` measurement sigmas so unmodelled
+   systematics land in the discrepancy channel rather than in $\theta$.
 3. **Laplace covariance** for $(\theta, d)$ by finite-difference Hessian,
    eigenvalue-floored at the prior curvature.
 4. **Posterior checks** — standardized residuals before/after the GP,
