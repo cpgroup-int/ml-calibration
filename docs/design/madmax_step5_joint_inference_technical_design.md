@@ -1294,3 +1294,85 @@ This Step-5 design is based on the locked parent proposal and the following sour
 9. **MADMAX prototype and positioning context:** MADMAX-related sources motivate the need to use achieved geometry, account for mechanical stability, and treat boost-factor uncertainty carefully.  
    <https://scoap3-prod-backend.s3.cern.ch/media/files/54293/10.1140/epjc/s10052-020-7985-8_a.pdf>  
    <https://arxiv.org/abs/2305.12808>
+
+---
+
+# Appendix A — Implementation status (Step 5)
+
+*Added by the implementation; the design text above is unchanged.
+Module: `madmax_calibration.steps.step5_inference`.*
+
+## A.1 Inference level
+
+**Level A** (§13.1): a joint MAP over (θ, drift rate, noise-inflation
+factor) with the discrepancy GPs marginalized analytically inside the
+objective — θ is never estimated without the discrepancy channel present
+(§3) — plus a Laplace covariance from a finite-difference Hessian
+(eigenvalue-floored at the prior curvature). Informative θ priors are
+mandatory as the note insists (§15.1). Correctable-vs-diagnostic
+classification (§8) and the prior-sensitivity identifiability check
+(§15.2) are implemented; a warm start from the previous posterior makes
+later updates converge in a couple of rounds.
+
+## A.2 Observation levels and channels (built beyond the first version)
+
+The note recommends starting at the scalar level and enriching later
+(§4). Both enrichments are now implemented and default:
+
+- **Curve-summary HF level** (§4.2; roadmap Phase 1.1). Each HF
+  measurement contributes the vector (J, log peak, band centroid,
+  bandwidth, flatness) — module `madmax_calibration.summaries` — with
+  one discrepancy GP per component. Frequency shift, amplitude loss and
+  bandwidth change become separable, which is what breaks the
+  detector-state degeneracies scalar J cannot. `observation_level =
+  "scalar"` retains the §4.1 special case; records without summaries
+  fall back to it with a diagnostic.
+- **Low-fidelity physics channel** (§12; roadmap Phase 1.2). Cheap
+  reflectivity/group-delay measurements join the *same* joint fit as a
+  second channel `y_l = S_l(u, θ) + r_l + ε`, exactly the multi-fidelity
+  observation model of §12 — the simulator predicts the reflectivity
+  (its own transfer-matrix reflection solve), and each LF component has
+  its own discrepancy GP so instrument systematics (amplitude
+  mis-calibration, cable delay) stay in the LF discrepancy rather than
+  biasing θ. This is what makes the diagnostic **loss** parameter
+  identifiable: with physically correct absorption, loss mimics geometry
+  in every boost summary, but |Γ|² dips measure it directly. The affine
+  LF→J link (§12) survives only as the `lf_channel = "affine"` fallback
+  for scalar proxies without a simulator counterpart.
+
+## A.3 Noise, drift, and a discrepancy-prior floor
+
+- One shared dimensionless **noise-inflation factor** scales each
+  component's stated σ (§10); the effective J-noise is reported.
+- **Drift** is the minimal linear-in-time model on the objective
+  component (§11.2). Moving it onto the geometry state θ (§7.5,
+  state-space view) is roadmap Phase 4.1.
+- **Discrepancy amplitude priors are floored** at a few measurement
+  sigmas (`discrepancy_sigma_floor`). Validation showed that without
+  this, unmodelled constant systematics (a curve tilt shifting the band
+  centroid) were bought by a biased θ instead of the discrepancy channel
+  — precisely the confounding §9.4/§15 warns about. The floor gives
+  systematics an affordable home in r.
+
+## A.4 Stability safeguards (found during validation)
+
+The failure modes of §17 appeared concretely and are guarded:
+
+- With very few LF points the joint MAP could grow a spurious mode
+  running the loss to its prior bound (§17.1/§17.2). Fix: every MAP
+  round is **multi-started** (current point + prior mean, best kept),
+  and the ML-II discrepancy-amplitude refit is **capped at 4 prior
+  sds** — the marginal likelihood alone has a weak Occam factor at small
+  n. With these, HF+reflectivity recovers the correctable geometry to
+  ~5–20 µm and the loss to ±0.015 (see `ROADMAP.md`).
+
+## A.5 Open items
+
+- Curve-**level** (per-bin) inference (§4.3) and richer multi-fidelity
+  covariance are not implemented; the summary level is the interface.
+- Full Bayesian sampling (Levels B/C, §13.2–13.3) is future work; the
+  `Step5Result.theta_samples` interface already matches what they would
+  provide (used by Step 6), and is the natural seam for the planned
+  amortized simulation-based inference (roadmap Phase 2).
+- Cross-summary measurement correlations are neglected (documented
+  Level-A approximation).

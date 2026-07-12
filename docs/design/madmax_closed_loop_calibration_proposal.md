@@ -1144,3 +1144,97 @@ The proposal above is based on the project structure discussed in this conversat
 
 15. **Importance of discrepancy for physical parameter learning:** Brynjarsdóttir and O’Hagan emphasize that ignoring model discrepancy can bias physical-parameter inference and produce overconfident predictions.  
     <https://www.tonyohagan.co.uk/academic/pdf/simmach.pdf>
+
+---
+
+# Appendix A — Implementation status
+
+*This appendix is added by the implementation. The design text above is
+unchanged; this records how the locked proposal was realized in the
+`madmax_calibration` package, what deviates, and what remains open. See
+the step-specific design notes for their own implementation appendices,
+and `ROADMAP.md` for the sequenced upgrade plan and its measured
+acceptance results.*
+
+## A.1 What is implemented
+
+The full seven-step loop runs closed-loop against a hardware interface,
+with a simulated MADMAX prototype for offline validation:
+
+- **Prototype scope.** The default detector is the **3-disk** MADMAX
+  prototype (mirror + 3 dielectric disks, hence three stack spacings:
+  mirror–disk1, disk1–disk2, disk2–disk3). The disk3→antenna path
+  (focusing mirror in between) is carried as a booster–antenna distance,
+  **not** a stack spacing (it does not enter the 1D boost solve).
+- **Everything is a setting.** All parameters — the per-window nominal
+  disk configurations, budgets, costs, priors, acquisition constants,
+  and the simulated detector's hidden errors — live in a TOML settings
+  file (`settings/prototype.toml`; module `madmax_calibration.settings`).
+  Any number of frequency windows may be defined; the shipped default
+  tiles 18–24 GHz with 12 windows, but neither the range nor the count
+  is hard-coded.
+- **Steps.** Step 0 (baseline + replication noise estimate + feasibility
+  screen); Step 1 (trust-region, hard-filtered, noise/cost/budget-aware
+  proposal with replicate / re-baseline / LF-probe / stop fallbacks);
+  Step 2 (move + achieved-readback verification + safe-step splitting);
+  Step 3 (antenna alignment: incumbent check → local scan+fit → 2D
+  GP-BO fallback); Step 4 (measurement wrapper, quality flags,
+  uncertainty, cost); Step 5 (joint MAP over detector-state,
+  discrepancy, noise, drift); Step 6 (sample-based posterior predictive
+  with latent/observation split and extrapolation/staleness diagnostics);
+  Step 7 (stopping) and final HF validation + feasibility report.
+- **Two-channel observations.** The high-fidelity channel uses
+  curve summaries (J, log peak, band centroid, bandwidth, flatness) by
+  default rather than a bare scalar J; the low-fidelity channel is a
+  physics observable (reflectivity + group delay) predicted by the
+  simulator, so cheap RF data calibrate the detector state jointly with
+  HF data. Both are the observation levels the Step-5 note anticipated
+  (§4.2, §12); see that note's appendix.
+
+## A.2 Faithful to the proposal's core commitments
+
+- **Achieved geometry** is used everywhere (§2.5): the dataset stores
+  commanded and achieved readback, and inference/trust-region logic use
+  the achieved values.
+- **Hard vs learned constraints** (§9) are kept strictly separate: the
+  travel box, minimum-gap collision limit, and maximum safe step are
+  enforced exactly before any candidate reaches hardware and are never
+  learned; only non-damaging measurement-quality failures train the
+  soft-constraint model.
+- **Noise/budget feasibility** (§7) is a first-class gate: Step 0
+  estimates σ_J from replication, Step 1 refuses HF measurements whose
+  expected improvement is below the noise, and Step 7 stops on the
+  resolvability condition.
+- **Discrepancy is inside the inference** (§8): θ is never estimated
+  without the discrepancy model present.
+
+## A.3 Deviations and simplifications (still open)
+
+- **Scalar objective, not multi-objective.** A physics-approved scalar
+  J (default: scan-rate proxy over W) is used; the area-law trade-off
+  (§6) is respected by keeping the full curves, but Pareto-front
+  calibration is not implemented.
+- **Drift is modelled on J**, not yet on θ; a linear rate suffices for
+  the prototype's slow drift. Moving drift onto the geometry state is
+  planned (roadmap Phase 4.1).
+- **Antenna-alignment uncertainty** is not yet propagated into the
+  booster-level objective (plug-in optimum; see the Step-6 appendix).
+- **Simulator is a stand-in.** The 1D transfer-matrix model is
+  qualitatively faithful (analytically verified transparent-mode boost
+  and reflection unitarity) but must be replaced by the real MADMAX
+  simulation behind the same interface. The correctable/diagnostic
+  labelling of θ is tied to the current control basis and must be
+  revisited when that basis changes.
+
+## A.4 Beyond the original proposal
+
+- A settings-driven **A/B benchmark harness**
+  (`madmax_calibration.benchmark`) reports HF-count-to-convergence,
+  improvement significance, θ-recovery error, posterior coverage, and
+  safety/budget compliance — used to accept every roadmap change.
+- An **identify-first** rule spends the first few cheap reflectivity
+  probes before HF measurements (a minimal precursor of the planned
+  value-of-information design).
+- Continuous integration builds the documentation and deploys it; the
+  test suite encodes the pre-hardware validation checklists from every
+  step design note.

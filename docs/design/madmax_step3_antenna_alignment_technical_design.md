@@ -940,3 +940,42 @@ The design above is based on the parent proposal and the following external sour
 
 7. **BoTorch constraints:** BoTorch distinguishes input/parameter constraints from modeled outcome constraints, supporting the hard-versus-learned constraint split used here.  
    <https://botorch.org/docs/constraints>
+
+---
+
+# Appendix A — Implementation status (Step 3)
+
+*Added by the implementation; the design text above is unchanged.
+Module: `madmax_calibration.steps.step3_antenna`.*
+
+## A.1 What was built
+
+The recommended hybrid strategy (§7), in order: warm start from the
+previous best antenna position → incumbent validation (§9, reuse if
+still good within κσ) → local plus/diagonal scan with a quadratic fit
+(§10, accepted only if the Hessian is a maximum, the optimum is inside
+the hard domain and within reach, and a confirmation measurement agrees)
+→ 2D Gaussian-process BO fallback with a noise-aware UCB acquisition
+(§11) when the fit is unreliable. Hard antenna travel limits are
+enforced by clipping every candidate before it is commanded (§12.1).
+
+The output is the achieved antenna position plus the full local dataset
+and a method/quality flag (`reused_incumbent`, `local_fit_confirmed`,
+`gp_bo_confirmed`, `budget_limited`), forwarded to Steps 4–6 as §16
+requires; a `budget_limited`/`noise_limited` alignment marks the
+Step-4 record `antenna_alignment_suspect`.
+
+## A.2 Unchanged by later phases; open items
+
+Step 3 was not modified by the curve-summary (Phase 1.1) or reflectivity
+(Phase 1.2) work — it remains a self-contained inner loop on the cheap
+coupling proxy. Still open, as the note anticipates:
+
+- **Alignment uncertainty is not yet propagated** into the booster-level
+  objective F(u_B); Step 6 uses a plug-in antenna optimum (its appendix
+  §A.3). A contextual A(u_A; u_B) model that also propagates this
+  uncertainty is roadmap Phase 4.3.
+- The alignment proxy's correlation with the high-fidelity objective
+  (§5) is assumed, not yet validated against real hardware.
+- Validation tests use synthetic Gaussian / distorted / noisy beams
+  (§20); the proxy-to-high-fidelity check (§20.6) awaits real data.
