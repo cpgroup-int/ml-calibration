@@ -1378,3 +1378,57 @@ External background anchors used for this Step-6 design:
 
 10. **Bayesian calibration with adaptive model discrepancy:** Recent calibration literature continues to emphasize joint treatment of model parameters and discrepancy.  
     <https://inria.hal.science/hal-03827922/document>
+
+---
+
+# Appendix A — Implementation status (Step 6)
+
+*Added by the implementation; the design text above is unchanged.
+Module: `madmax_calibration.steps.step6_predictive`.*
+
+## A.1 What was built
+
+The **posterior-sample** construction (§8): Laplace posterior samples of
+θ from Step 5 are pushed through the fast simulator per candidate; the
+discrepancy GP adds its mean and variance; drift extrapolates to the
+intended future measurement time. Latent-objective and future-observation
+predictions are kept distinct (§7) — `latent_sd` answers "is this
+configuration better", `obs_sd` adds the measurement-noise floor for
+"what will a measurement look like". Posterior samples of the latent
+objective are exposed for Thompson-style use.
+
+Every prediction carries the diagnostics the note requires: an
+extrapolation regime from distance to the nearest HF training point
+(§17: interpolation / mild / strong), a staleness measure (§16), and,
+before hand-off to Step 1, a validation pass — standardized residuals
+over the training data with a 2σ coverage figure and over/under-confidence
+flags (§21). Correctable-vs-diagnostic labels and the hard-domain filter
+are preserved.
+
+## A.2 Unchanged interface across Phases 1.1–1.2
+
+The Step-5→Step-6 boundary held: the richer Step-5 inference (curve
+summaries, reflectivity channel) flows through **without any Step-6
+interface change** — better θ posteriors simply yield sharper, better-
+calibrated predictions of J. The J-component discrepancy GP is the one
+Step 6 consumes; the per-summary and reflectivity GPs live alongside it
+in the Step-5 result and are available but not yet used for multi-output
+prediction.
+
+## A.3 Open items
+
+- **Plug-in antenna optimum** (§5, option 1): predictions are for the
+  antenna-aligned F(u_B) but do **not** yet propagate antenna-alignment
+  uncertainty (roadmap Phase 4.3). This is the documented approximation
+  of §5/§6.
+- **Multi-fidelity predictive output** (§11): Step 6 predicts J; it does
+  not yet expose a joint predictive over the reflectivity observables
+  (the LF channel is consumed inside Step 5 instead). A multi-output
+  predictive is the natural next step if LF-informed look-ahead
+  acquisition is added (roadmap Phase 3).
+- **Achieved-geometry distribution** (§6): predictions condition on
+  commanded ≈ expected achieved geometry; the achieved-geometry
+  *distribution* is not integrated (achieved readback is used for all
+  training data).
+- Multi-objective predictive output (§10) is not implemented (scalar
+  objective).

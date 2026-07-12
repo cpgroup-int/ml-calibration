@@ -168,7 +168,8 @@ Acquisition and decision gates (Step 1 design §9–13, 16–17).
 | `ei_noise_factor` | 0.3 | A new HF measurement requires EI > factor × HF noise (the "don't chase noise" gate). |
 | `incumbent_sd_factor` | 1.5 | Replicate the incumbent when its posterior sd exceeds this multiple of the HF noise. |
 | `rebaseline_after_hours` | 12.0 | Staleness limit before a re-baseline action is forced (drift rule). |
-| `n_theta_samples` | 6 | Posterior $\theta$ samples pushed through the simulator per prediction. More samples = smoother uncertainty, linearly more simulator calls. |
+| `n_theta_samples` | 8 | Posterior $\theta$ samples pushed through the simulator per prediction. More samples = smoother uncertainty, linearly more simulator calls. |
+| `min_lf_identification` | 3 | Identify-first rule (minimal Phase-3.4 precursor): while fewer than this many physics-channel LF measurements exist, spend ~0.1 h reflectivity probes before new HF candidates. |
 | `seed` | 0 | Seed for the Sobol sampler and prediction sampling. |
 
 ## `step5` — {class}`~madmax_calibration.config.Step5Config`
@@ -179,6 +180,7 @@ optional* — they are what separates $\theta$ from discrepancy).
 | Field | Default | Meaning |
 |---|---|---|
 | `observation_level` | `"curve_summary"` | What each HF measurement contributes to the joint fit: the curve-summary vector (J, log peak, centroid, bandwidth, flatness — roadmap Phase 1.1) or, with `"scalar"`, only J (the pre-1.1 behaviour, kept for A/B benchmarking). |
+| `lf_channel` | `"physics"` | How LF reflectivity data enter the joint fit (roadmap Phase 1.2): `"physics"` routes the reflectivity/group-delay summaries through the simulator so they constrain θ jointly; `"affine"` keeps only the scalar-link fallback; `"off"` ignores LF data. |
 | `prior_sd_z_offset` ⚠ | 0.5 mm | Gaussian prior sd for the stack z-offset. |
 | `prior_sd_compression` ⚠ | 0.25 mm | Gaussian prior sd for the uniform gap error. |
 | `prior_sd_log_loss` | 0.7 | Gaussian prior sd for the log loss-scale. |

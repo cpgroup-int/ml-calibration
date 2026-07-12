@@ -137,6 +137,93 @@ def _beta2_curves(
     return np.abs(a_out) ** 2
 
 
+def _reflection_curves(
+    freqs: np.ndarray,
+    gaps: np.ndarray,
+    thicknesses: np.ndarray,
+    n_disk: complex,
+) -> np.ndarray:
+    """Complex reflection coefficient Gamma(nu) seen from the antenna side.
+
+    Same region/interface machinery as :func:`_beta2_curves`, but with no
+    axion source and a unit-amplitude wave incident from the semi-infinite
+    vacuum region (B_{R-1} = 1); the outgoing amplitude A_{R-1} is Gamma.
+    For a lossless stack in front of a perfect mirror |Gamma| = 1 exactly
+    (energy conservation); dielectric loss produces dips at resonances,
+    and the phase carries the group-delay information used by the
+    low-fidelity calibration channel (roadmap Phase 1.2).
+    """
+    n_disks = len(thicknesses)
+    indices = [1.0 + 0j]
+    lengths = [gaps[0]]
+    for i in range(n_disks):
+        indices.append(n_disk)
+        lengths.append(thicknesses[i])
+        if i + 1 < len(gaps):
+            indices.append(1.0 + 0j)
+            lengths.append(gaps[i + 1])
+    indices.append(1.0 + 0j)
+    lengths.append(0.0)
+
+    R = len(indices)
+    n_r = np.array(indices)
+    d_r = np.array(lengths)
+
+    F = len(freqs)
+    k = 2.0 * np.pi * freqs[:, None] * n_r[None, :] / C_LIGHT
+    phase = np.exp(1j * k[:, :-1] * d_r[None, :-1])
+
+    n_unk = 2 * R - 1
+    M = np.zeros((F, n_unk, n_unk), dtype=complex)
+    rhs = np.zeros((F, n_unk), dtype=complex)
+
+    def a_idx(r: int) -> int:
+        return r
+
+    def b_idx(r: int) -> int:
+        return R + r
+
+    row = 0
+    # Mirror: total field vanishes, no source term.
+    M[:, row, a_idx(0)] = 1.0
+    M[:, row, b_idx(0)] = 1.0
+    row += 1
+
+    for r in range(R - 1):
+        pr = phase[:, r]
+        ipr = 1.0 / pr
+        M[:, row, a_idx(r)] = pr
+        M[:, row, b_idx(r)] = ipr
+        M[:, row, a_idx(r + 1)] = -1.0
+        if r + 1 <= R - 2:
+            M[:, row, b_idx(r + 1)] = -1.0
+        else:
+            rhs[:, row] = 1.0          # known incoming B_{R-1} = 1
+        row += 1
+        M[:, row, a_idx(r)] = n_r[r] * pr
+        M[:, row, b_idx(r)] = -n_r[r] * ipr
+        M[:, row, a_idx(r + 1)] = -n_r[r + 1]
+        if r + 1 <= R - 2:
+            M[:, row, b_idx(r + 1)] = n_r[r + 1]
+        else:
+            rhs[:, row] = -n_r[r + 1]  # known incoming B_{R-1} = 1
+        row += 1
+
+    sol = np.linalg.solve(M, rhs[..., None])[..., 0]
+    return sol[:, a_idx(R - 1)]
+
+
+def group_delay(freqs: np.ndarray, gamma: np.ndarray) -> np.ndarray:
+    """Group delay tau_g(nu) = (1/2pi) dphi/dnu of a reflection curve [s].
+
+    Sign convention: with the e^{+ikx} spatial phasor used by the solver,
+    a mirror at distance L gives Gamma proportional to e^{i 2kL}, i.e.
+    dphi/dnu = 2pi (2L/c) — the positive round-trip delay.
+    """
+    phi = np.unwrap(np.angle(gamma))
+    return np.gradient(phi, freqs) / (2.0 * np.pi)
+
+
 @dataclass
 class BoostSimulator:
     """Fast simulator: geometry + theta -> boost curve and coupling."""
@@ -173,7 +260,7 @@ class BoostSimulator:
     def beta2(self, u_B: np.ndarray, theta: DetectorState) -> np.ndarray:
         geom = self.geometry_with_state(u_B, theta)
         loss = self.cfg.disk_loss_tan * float(np.exp(theta.log_loss))
-        n_disk = self.cfg.disk_index * (1.0 - 0.5j * loss)
+        n_disk = self.cfg.disk_index * (1.0 + 0.5j * loss)
         return _beta2_curves(self._freqs, geom.gaps, geom.thicknesses, n_disk)
 
     # ---- antenna/receiver coupling --------------------------------------
@@ -224,6 +311,32 @@ class BoostSimulator:
         curve = self.beta2(u_B, theta) * self.aligned_coupling(u_B, theta)
         return summarizer(curve)
 
+    # ---- reflectivity (low-fidelity channel, roadmap Phase 1.2) ---------
+
+    def reflection(self, u_B: np.ndarray, theta: DetectorState) -> np.ndarray:
+        """Complex reflection coefficient Gamma(nu) of the stack.
+
+        Modelled at the booster reference plane (receiver-chain and
+        coupling-path effects belong to the LF discrepancy channel).
+        """
+        geom = self.geometry_with_state(u_B, theta)
+        loss = self.cfg.disk_loss_tan * float(np.exp(theta.log_loss))
+        n_disk = self.cfg.disk_index * (1.0 + 0.5j * loss)
+        return _reflection_curves(self._freqs, geom.gaps, geom.thicknesses, n_disk)
+
+    def reflectivity_observables(
+        self, u_B: np.ndarray, theta: DetectorState
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """(power reflectivity ``abs(Gamma)**2``, group delay tau_g [s]) on the grid."""
+        gamma = self.reflection(u_B, theta)
+        return np.abs(gamma) ** 2, group_delay(self._freqs, gamma)
+
+    def predict_reflectivity_summaries(
+        self, u_B: np.ndarray, theta: DetectorState, refl_summarizer
+    ) -> np.ndarray:
+        refl, gd = self.reflectivity_observables(u_B, theta)
+        return refl_summarizer(refl, gd)
+
 
 def nominal_half_wave_geometry(cfg: SimulatorConfig) -> tuple[np.ndarray, np.ndarray]:
     """Analytic transparent-mode seed: half-wave gaps and disks.
@@ -252,7 +365,7 @@ def optimize_nominal_gaps(
 
     gaps0, thick = nominal_half_wave_geometry(cfg)
     freqs = cfg.frequency_grid()
-    n_disk = cfg.disk_index * (1.0 - 0.5j * cfg.disk_loss_tan)
+    n_disk = cfg.disk_index * (1.0 + 0.5j * cfg.disk_loss_tan)
 
     def neg_j(gaps: np.ndarray) -> float:
         if np.any(gaps < 1e-4):

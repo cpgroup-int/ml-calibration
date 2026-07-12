@@ -1401,3 +1401,58 @@ This Step-4 design follows the parent proposal and uses the following external r
 8. **BoTorch multi-fidelity context:**  
    BoTorch documentation describes multi-fidelity Bayesian optimization with knowledge-gradient acquisition, motivating the separation between cheaper proxy measurements and the target high-fidelity objective.  
    <https://botorch.org/docs/v0.16.0/tutorials/multi_fidelity_bo>
+
+---
+
+# Appendix A — Implementation status (Step 4)
+
+*Added by the implementation; the design text above is unchanged.
+Module: `madmax_calibration.steps.step4_measure`.*
+
+## A.1 What was built
+
+The measurement wrapper of §19: pre-measurement state check (a
+geometry-out-of-tolerance candidate is not measured and returns an
+invalid record with no fabricated J, §6.1/§20.1); execution of the
+selected fidelity; data reduction; uncertainty estimation with
+Monte-Carlo propagation split into shared-normalization and per-bin
+components (§9.4–9.5); quality flags and a post-measurement geometry
+re-read that raises `drift_suspected` (§6.3); cost accounting; and the
+standardized `MeasurementRecord` of §13.
+
+## A.2 Richer observables than the first design
+
+The record now carries **structured observables** with an
+`observable_id`, beyond the scalar of the minimal design (§17):
+
+- **High-fidelity** records carry the boost curve **and** its
+  curve-summary vector — J, log peak, band centroid, bandwidth,
+  flatness (`observable_id = "beta2"`; roadmap Phase 1.1). J and σ_J are
+  component 0 of the same Monte-Carlo propagation, so the scalar path is
+  a strict special case.
+- **Low-fidelity** records carry the reflectivity and group-delay
+  **curves** with per-bin uncertainties plus their summary vector
+  (`observable_id = "reflectivity"`; roadmap Phase 1.2), i.e. the
+  "richer than a scalar" lower-fidelity data the note recommends
+  preserving (§16, §22.4). A scalar convenience value (mean
+  reflectivity) is also stored.
+
+## A.3 Fidelity firewall preserved
+
+The §7.3 rule is enforced by construction: LF records never carry a J
+value (`J` stays `None`, comment "J_HF not measured in this iteration"),
+so nothing downstream can mistake proxy data for a validated boost-factor
+objective. Only high-fidelity records are eligible as the validated
+best, and Step 5 consumes LF data solely through the physics channel /
+affine-link fallback.
+
+## A.4 Open items
+
+- Curve-level (per-bin) inference (§8, §16) is not used; the reduction
+  to summaries is the current interface (Step-5 appendix). Full raw
+  curves are preserved on the record for a future upgrade.
+- Frequency-correlated (covariance) curve uncertainty (§9.4) is
+  approximated by the shared/independent split; a full covariance is
+  not yet propagated.
+- The real gradient-method and RF measurement models, instrument-state
+  checks, and cost figures must be supplied by the MADMAX team.

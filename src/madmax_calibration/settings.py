@@ -196,7 +196,14 @@ def _parse_mock(data: dict) -> tuple[MockTruth, NoiseModel]:
             theta_kwargs[key] = float(truth_data.pop(key))
     if theta_kwargs:
         truth.theta = DetectorState(**{**dataclasses.asdict(truth.theta), **theta_kwargs})
-    valid_truth = {"beam_center", "focus_optimum", "discrepancy_tilt", "drift_rate_z"}
+    valid_truth = {
+        "beam_center",
+        "focus_optimum",
+        "discrepancy_tilt",
+        "drift_rate_z",
+        "refl_calibration_bias",
+        "gd_delay_offset",
+    }
     for key, value in truth_data.items():
         if key not in valid_truth:
             raise ValueError(
@@ -416,6 +423,8 @@ def write_settings_file(
         f"focus_optimum = {_fmt(mock_truth.focus_optimum)}",
         f"discrepancy_tilt = {_fmt(mock_truth.discrepancy_tilt)}",
         f"drift_rate_z = {_fmt(mock_truth.drift_rate_z)}",
+        f"refl_calibration_bias = {_fmt(mock_truth.refl_calibration_bias)}",
+        f"gd_delay_offset = {_fmt(mock_truth.gd_delay_offset)}",
         "",
     ]
     lines += _section_lines("mock.noise", mock_noise)

@@ -59,6 +59,46 @@ def test_control_basis_cancels_correctable_errors(objective):
     assert abs(j_fixed - j_nominal) < 0.01 * j_nominal
 
 
+def test_reflection_unitary_when_lossless():
+    """Energy conservation: a lossless stack in front of a perfect mirror
+    reflects everything, |Gamma|^2 = 1 at every frequency."""
+    from madmax_calibration.simulator import _reflection_curves
+
+    cfg = SimulatorConfig(n_disks=3, disk_loss_tan=0.0)
+    gaps, thick = nominal_half_wave_geometry(cfg)
+    gamma = _reflection_curves(cfg.frequency_grid(), gaps, thick, cfg.disk_index + 0j)
+    assert np.allclose(np.abs(gamma) ** 2, 1.0, atol=1e-10)
+
+
+def test_reflection_loss_absorbs_and_group_delay_positive():
+    """With dielectric loss the stack absorbs (|Gamma|^2 < 1) and the
+    reflection group delay is the positive round-trip storage time."""
+    from madmax_calibration.simulator import group_delay
+
+    _, control_map, simulator, _ = make_setup()
+    u0 = np.zeros(control_map.dim)
+    refl, gd = simulator.reflectivity_observables(u0, DetectorState(log_loss=0.3))
+    assert np.all(refl < 1.0)
+    assert np.all(gd > 0.0)
+    # Loss reduces the boost objective (physical absorption).
+    from madmax_calibration.objectives import Objective
+
+    obj = Objective("scan_rate")
+    j0 = obj(simulator.beta2(u0, DetectorState()))
+    j_lossy = obj(simulator.beta2(u0, DetectorState(log_loss=1.0)))
+    assert j_lossy < j0
+
+
+def test_reflectivity_responds_to_geometry():
+    """The LF channel carries geometry information (roadmap Phase 1.2)."""
+    _, control_map, simulator, _ = make_setup()
+    u0 = np.zeros(control_map.dim)
+    r0, g0 = simulator.reflectivity_observables(u0, DetectorState())
+    r1, g1 = simulator.reflectivity_observables(u0, DetectorState(z_offset=500e-6))
+    assert np.sqrt(np.mean((r1 - r0) ** 2)) > 0.005   # above LF noise floor
+    assert np.max(np.abs(g1 - g0)) > 5e-12            # group delay moves > 5 ps
+
+
 def test_coupling_decreases_off_beam_and_off_focus():
     _, _, simulator, _ = make_setup()
     on = simulator.coupling(np.zeros(2), 0.0)

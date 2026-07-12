@@ -102,3 +102,84 @@ class CurveSummarizer:
             )
             zs[s] = self(np.clip(curve, 0.0, None))
         return self(beta2), np.std(zs, axis=0, ddof=1)
+
+
+REFLECTIVITY_SUMMARY_NAMES = ("refl_mean", "refl_slope", "gd_centroid", "gd_mean_ns")
+
+
+@dataclass
+class ReflectivitySummarizer:
+    """Summaries of the low-fidelity reflectivity measurement.
+
+    Compresses the power reflectivity |Gamma|^2(nu) and the group delay
+    tau_g(nu) into a small vector (roadmap Phase 1.2):
+
+    ============= =====================================================
+    ``refl_mean``   mean power reflectivity over W (dielectric loss)
+    ``refl_slope``  linear slope of |Gamma|^2 across the window
+    ``gd_centroid`` tau_g^2-weighted band centroid, in half-widths
+                    (resonance position -> geometry)
+    ``gd_mean_ns``  mean group delay in nanoseconds (photon storage)
+    ============= =====================================================
+
+    All components are smooth in the underlying geometry, and Monte-Carlo
+    uncertainty propagation mirrors :class:`CurveSummarizer`.
+    """
+
+    freqs: np.ndarray
+    _center: float = field(init=False, default=0.0)
+    _half_width: float = field(init=False, default=1.0)
+    _xi: np.ndarray = field(init=False, default=None)
+
+    def __post_init__(self) -> None:
+        self.freqs = np.asarray(self.freqs, dtype=float)
+        self._center = 0.5 * (self.freqs[0] + self.freqs[-1])
+        self._half_width = max(0.5 * (self.freqs[-1] - self.freqs[0]), 1.0)
+        self._xi = (self.freqs - self._center) / self._half_width   # [-1, 1]
+
+    @property
+    def names(self) -> tuple:
+        return REFLECTIVITY_SUMMARY_NAMES
+
+    @property
+    def dim(self) -> int:
+        return len(REFLECTIVITY_SUMMARY_NAMES)
+
+    def __call__(self, refl: np.ndarray, gd: np.ndarray) -> np.ndarray:
+        refl = np.asarray(refl, dtype=float)
+        gd = np.asarray(gd, dtype=float)
+        refl_mean = float(np.mean(refl))
+        # Least-squares slope against the normalized frequency coordinate.
+        xi = self._xi
+        refl_slope = float(np.sum((xi - xi.mean()) * refl) / np.sum((xi - xi.mean()) ** 2))
+        w = gd**2
+        w_sum = float(np.sum(w)) + 1e-30
+        gd_centroid = float(np.sum(xi * w) / w_sum)
+        gd_mean_ns = float(np.mean(gd) * 1e9)
+        return np.array([refl_mean, refl_slope, gd_centroid, gd_mean_ns])
+
+    def with_uncertainty(
+        self,
+        refl: np.ndarray,
+        refl_sigma: np.ndarray,
+        gd: np.ndarray,
+        gd_sigma: np.ndarray,
+        rng: np.random.Generator | None = None,
+        n_samples: int = 256,
+        correlated_fraction: float = 0.5,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        rng = rng or np.random.default_rng(0)
+        refl = np.asarray(refl, dtype=float)
+        gd = np.asarray(gd, dtype=float)
+        r_sig = np.broadcast_to(np.asarray(refl_sigma, dtype=float), refl.shape)
+        g_sig = np.broadcast_to(np.asarray(gd_sigma, dtype=float), gd.shape)
+        r_shared = np.sqrt(correlated_fraction) * r_sig
+        r_indep = np.sqrt(1.0 - correlated_fraction) * r_sig
+        g_shared = np.sqrt(correlated_fraction) * g_sig
+        g_indep = np.sqrt(1.0 - correlated_fraction) * g_sig
+        zs = np.empty((n_samples, self.dim))
+        for s in range(n_samples):
+            r = refl + r_shared * rng.standard_normal() + r_indep * rng.standard_normal(refl.shape)
+            g = gd + g_shared * rng.standard_normal() + g_indep * rng.standard_normal(gd.shape)
+            zs[s] = self(np.clip(r, 0.0, None), g)
+        return self(refl, gd), np.std(zs, axis=0, ddof=1)

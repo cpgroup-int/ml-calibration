@@ -56,6 +56,50 @@ automatic, diagnosed fallback to scalar level. Full curve-level inference
 (§4.3) remains a future extension; the records preserve the curves it
 would need.
 
+## The low-fidelity physics channel
+
+With `Step5Config.lf_channel = "physics"` (default; roadmap Phase 1.2),
+every cheap reflectivity measurement joins the same joint fit as a second
+observation channel — the structure of Step 5 design §12, taken
+literally:
+
+$$
+y_{i,\ell} \;=\; S_\ell(\tilde u_i, \theta) \;+\; r_\ell(\tilde u_i)
+\;+\; \epsilon_{i,\ell},
+$$
+
+where $y_\ell$ are the reflectivity summaries (mean power reflectivity,
+its slope across the window, group-delay centroid, mean group delay —
+{class}`~madmax_calibration.summaries.ReflectivitySummarizer`) and
+$S_\ell$ is the simulator's reflection solve
+({meth}`~madmax_calibration.simulator.BoostSimulator.reflectivity_observables`).
+Each LF component has its own discrepancy GP, so instrument systematics
+(amplitude mis-calibration, cable-delay offset) live in the LF
+discrepancy channel rather than biasing $\theta$.
+
+Why this matters: with physically correct absorption, the dielectric
+loss mimics geometry in *every boost-curve summary* (both reduce peak
+and objective), leaving a geometry/loss quasi-degeneracy that HF data
+cannot resolve — while $|\Gamma|^2$ dips measure absorption directly and
+the group delay pins the resonance geometry. Measured on the benchmark:
+adding six ~0.1 h reflectivity probes to ten HF points takes the
+correctable-parameter recovery from ~100 µm (weakly identified loss) to
+~5–20 µm with the loss known to ±0.015.
+
+The affine LF→J link ({class}`~madmax_calibration.steps.step5_inference.LFLinkModel`)
+remains only as the fallback for scalar proxies without a simulator
+counterpart (`lf_channel = "affine"`); `"off"` ignores LF data entirely
+(used by the benchmark A/B).
+
+### Stability safeguards of the joint MAP
+
+Two safeguards added after Phase-1.2 validation exposed a spurious mode
+(the optimizer running the loss to its prior bound with few LF points):
+every MAP round is **multi-started** (current point + prior mean, best
+kept), and the ML-II amplitude refit is **capped at 4 prior sds** — with
+very few points the marginal likelihood alone cannot rule out runaway
+discrepancy explanations.
+
 ## Joint MAP inference (Level A)
 
 {func}`~madmax_calibration.steps.step5_inference.run_step5` maximizes the

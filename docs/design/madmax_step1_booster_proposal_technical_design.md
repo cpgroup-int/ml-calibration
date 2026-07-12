@@ -1093,3 +1093,65 @@ This Step-1 design note is based on the current MADMAX closed-loop calibration p
 
 7. **Multi-objective Bayesian optimization:** BoTorch describes multi-objective BO as learning a Pareto front of optimal trade-offs.  
    <https://botorch.org/docs/multi_objective>
+
+---
+
+# Appendix A — Implementation status (Step 1)
+
+*Added by the implementation; the design text above is unchanged.
+Module: `madmax_calibration.steps.step1_propose`.*
+
+## A.1 Which variant was built
+
+The **recommended** Step 1 (§19.2): a physics-informed, trust-region,
+constrained, budget-aware decision step. Per proposal it returns a
+structured `Proposal` (action, fidelity, physical `u_B`, prediction
+metadata, expected cost, feasibility certificates, human-readable
+reason) — the auditable output package of §21.
+
+Candidate generation follows §20: a Sobol pool inside
+(trust region ∩ hard-feasible domain, max-step filtered), plus a
+**physics-informed exploit candidate** — a local Nelder-Mead
+maximization of the plug-in predictive mean — merged into the pool so
+the calibrated simulator's knowledge (e.g. "cancel the inferred stack
+offset") enters the proposal directly.
+
+The acquisition is `A = [EI + λ_info·σ_latent]·P_soft / cost` with a hard
+veto below the soft-feasibility threshold, and the fallback ladder of
+§22 (replicate incumbent → re-baseline → LF probe → stop). Noise-aware
+(§16) and drift-aware (§17) gates are as specified.
+
+## A.2 Additions beyond the note
+
+- **Physics low-fidelity channel + identify-first rule** (roadmap Phase
+  1.2). The LF action is no longer a scalar proxy tied to J by an
+  affine link; it is a reflectivity/group-delay measurement the
+  simulator predicts, so it constrains θ directly. Step 1 therefore
+  spends the first `min_lf_identification` cheap probes *before* any HF
+  candidate (a minimal precursor of the value-of-information design that
+  §11's information term motivates), and LF probes remain informative
+  throughout rather than only while a link validates. These
+  identification probes are excluded from the Step-7 patience counter.
+- **Curve-summary predictions.** The acquisition consumes the Step-6
+  predictive object unchanged; the richer Step-5 inference (curve
+  summaries + reflectivity) simply makes μ/σ sharper.
+
+## A.3 Corrections found during validation
+
+- **Re-command, don't re-achieve.** Re-baseline and replicate actions
+  re-command the recorded *command* vector, not the achieved readback:
+  readback noise/hysteresis can place the achieved point marginally
+  outside the hard travel box, which would otherwise make a safe
+  incumbent look infeasible. Caught by the benchmark's safety column.
+
+## A.4 Open / not yet built
+
+- The §26 open choices (u_B content, hard domain, objective,
+  fidelities, budgets, priors) are now **settings-file fields**, but
+  their *values* still need fixing with the MADMAX team (flagged ⚠ in
+  the settings file and `DESIGN_DECISIONS.md`).
+- The information term is the posterior-sd proxy of §11, not a
+  knowledge-gradient / entropy quantity (roadmap Phase 3.2).
+- Multi-objective / Pareto acquisition (§18) is not implemented.
+- Multi-fidelity acquisition is the identify-first heuristic above,
+  not the full cost-aware value-of-information rule (roadmap Phase 3).

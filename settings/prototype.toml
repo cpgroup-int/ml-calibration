@@ -73,10 +73,12 @@ ei_noise_factor = 0.3
 incumbent_sd_factor = 1.5
 rebaseline_after_hours = 12
 n_theta_samples = 8
+min_lf_identification = 3
 seed = 0
 
 [step5]
 observation_level = "curve_summary"
+lf_channel = "physics"
 prior_sd_z_offset = 0.0005
 prior_sd_compression = 0.00025
 prior_sd_log_loss = 0.7
@@ -102,11 +104,14 @@ beam_center = [0.0025, -0.0015]
 focus_optimum = 0.0006
 discrepancy_tilt = 0.04
 drift_rate_z = 2e-06
+refl_calibration_bias = 0.01
+gd_delay_offset = 2e-11
 
 [mock.noise]
 hf_norm_jitter = 0.01
 hf_bin_noise = 0.01
-lf_rel_noise = 0.05
+lf_refl_noise = 0.005
+lf_gd_noise = 2e-11
 actuator_repeatability = 5e-06
 actuator_hysteresis = 1e-05
 readback_noise = 2e-06

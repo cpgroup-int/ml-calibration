@@ -15,6 +15,9 @@ def _proposer_setup(objective, theta_true=None, seed=0):
     config, control_map, simulator, ds, model = _build_model(
         objective, theta_true=theta_true or DetectorState(z_offset=0.3e-3), seed=seed
     )
+    # The legacy decision-logic tests exercise the HF path; the
+    # identification-first LF rule has its own test below.
+    config.step5.lf_channel = "off"
     hard = HardConstraints(control_map, config.control)
     soft = SoftConstraintModel()
     proposer = Step1Proposer(config, hard, soft, rng=np.random.default_rng(seed))
@@ -74,6 +77,22 @@ def test_stop_when_nothing_meaningful_remains(objective):
     # (sd threshold scales with noise), so the ladder ends at STOP.
     assert prop.action == ActionType.STOP
     assert prop.reason
+
+
+def test_identification_first_lf_probes(objective):
+    """Roadmap Phase 1.2: with the physics LF channel active and no
+    reflectivity data yet, the planner spends cheap identification probes
+    before new HF candidates."""
+    config, control_map, ds, model, hard, proposer, tr, budget, current, now = _proposer_setup(objective)
+    config.step5.lf_channel = "physics"
+    prop = proposer.propose(model, ds, tr, budget, current, now)
+    assert prop.action == ActionType.LF_PROBE
+    assert prop.fallback == "lf_identification"
+    assert hard.feasible(prop.u_B, current)
+    # Without LF budget the rule cannot fire.
+    budget.lf_remaining = 0
+    prop2 = proposer.propose(model, ds, tr, budget, current, now)
+    assert prop2.fallback != "lf_identification"
 
 
 def test_trust_region_expands_and_shrinks():

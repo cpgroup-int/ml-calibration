@@ -40,12 +40,16 @@ in every measurement record.
 ## 4. Measurement fidelities  ⚠
 
 Two fidelities: the high-fidelity gradient-method boost-factor
-determination (treated as an oracle behind `HardwareInterface`) and one
-scalar lower-fidelity RF proxy.  The LF→HF relation is learned online as
-an affine link with residual uncertainty (Step 5 design, section 12) and
-the proxy is only used for acquisition once the link validates.
-**Open:** which proxies (reflectivity, group delay, coupling) actually
-exist and their real costs.
+determination (treated as an oracle behind `HardwareInterface`) and a
+lower-fidelity RF measurement returning power reflectivity |Γ|²(ν) and
+group delay τ_g(ν) (roadmap Phase 1.2).  The LF measurement is a
+*physics observable the simulator can predict*: it enters the Step-5
+joint fit as a second channel y_ℓ = S_ℓ(u, θ) + r_ℓ + ε (design §12,
+taken literally), so cheap RF curves constrain θ jointly with HF data.
+The affine LF→J link (Step 5 design §12) survives only as the fallback
+(`lf_channel = "affine"`) for scalar proxies without a simulator
+counterpart.  **Open:** the real reflectivity/group-delay measurement
+model and costs, and whether other proxies (coupling) are worth adding.
 
 ## 5. Measurement-noise model
 

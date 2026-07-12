@@ -46,11 +46,15 @@ def test_hf_record_is_complete():
 
 def test_lf_record_never_pretends_to_be_hf():
     """Lower-fidelity pipeline test (design section 21.3): J_HF is
-    explicitly not measured."""
+    explicitly not measured; the record carries the reflectivity and
+    group-delay curves (roadmap Phase 1.2)."""
     rec = _measure(Fidelity.LF_PROXY)
     assert rec.valid
     assert rec.J is None and rec.sigma_J is None
     assert rec.proxy_value is not None and rec.proxy_sigma is not None
+    assert rec.proxy_curves is not None
+    for key in ("reflectivity", "reflectivity_sigma", "group_delay", "group_delay_sigma"):
+        assert key in rec.proxy_curves
     assert QualityFlag.VALID_LOW_FIDELITY in rec.quality_flags
     assert "not measured" in rec.comments
 

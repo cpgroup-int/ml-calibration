@@ -23,7 +23,10 @@ design's §19 logic:
    - `HF` / `HF_validation` → the gradient-method boost-factor oracle
      (`measure_boost_factor`), treated exactly as the design requires: an
      existing measurement routine wrapped, not reimplemented.
-   - `LF_proxy` → the scalar proxy oracle (`measure_lf_proxy`).
+   - `LF_proxy` → the reflectivity measurement (`measure_lf_proxy`):
+     power reflectivity and group-delay curves with per-bin
+     uncertainties, stored on the record (`proxy_curves`) together with
+     their summary vector (roadmap Phase 1.2).
 3. **Data reduction.** For HF data: store the curve
    $\widehat{\beta^2}(\nu)$ with its per-bin uncertainty, then compute
    the scalar objective with Monte-Carlo uncertainty propagation
@@ -41,9 +44,12 @@ design's §19 logic:
 
 The record schema enforces the design's central data rule:
 
-- HF records carry `J` and `sigma_J` (plus the curve);
-- LF records carry `proxy_value`/`proxy_sigma`, **`J` stays `None`**, and
-  the comment field states "J_HF not measured in this iteration" (§7.3).
+- HF records carry `J` and `sigma_J` (plus the curve and its summary
+  vector, `observable_id = "beta2"`);
+- LF records carry the reflectivity/group-delay curves and summaries
+  (`observable_id = "reflectivity"`) plus a scalar convenience value —
+  **`J` stays `None`**, and the comment field states "J_HF not measured
+  in this iteration" (§7.3).
 
 Nothing downstream can accidentally treat proxy data as a validated
 boost-factor objective — Step 5 consumes LF records only through the

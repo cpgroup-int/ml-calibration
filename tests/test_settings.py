@@ -28,7 +28,7 @@ z_offset = 5e-4
 beam_center = [1e-3, -1e-3]
 
 [mock.noise]
-lf_rel_noise = 0.08
+lf_refl_noise = 0.008
 
 [[disk_configuration]]
 name = "low"
@@ -61,7 +61,7 @@ def test_load_settings_applies_all_sections(settings_file):
     assert s.config.step5.discrepancy_lengthscale_bounds == (0.2, 1.5)
     assert s.mock_truth.theta.z_offset == 5e-4
     assert np.allclose(s.mock_truth.beam_center, [1e-3, -1e-3])
-    assert s.mock_noise.lf_rel_noise == 0.08
+    assert s.mock_noise.lf_refl_noise == 0.008
     assert s.window_names == ["low", "high"]
     assert s.active == "low"
 

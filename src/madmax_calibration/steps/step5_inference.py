@@ -1,20 +1,22 @@
 """Step 5: jointly update detector-state, discrepancy, noise, drift inference.
 
-Implements inference Level A of the Step 5 design note (section 13.1) at
-either of two observation levels (section 4, selected by
-``Step5Config.observation_level``):
+Implements inference Level A of the Step 5 design note (section 13.1) over
+two observation *channels*:
 
-- ``"curve_summary"`` (default, roadmap Phase 1.1): each HF measurement
-  contributes a vector of physically meaningful curve summaries
-  z = (J, log peak, band centroid, bandwidth, flatness) — frequency
-  shifts, amplitude losses and bandwidth changes are then distinguishable,
-  which breaks the detector-state degeneracies that scalar-level
-  inference cannot resolve.
-- ``"scalar"``: each HF measurement contributes only (J, sigma_J) — the
-  pre-Phase-1.1 behaviour, kept as the 1-component special case for A/B
-  benchmarking.
+- the **high-fidelity channel** at either observation level (section 4,
+  selected by ``Step5Config.observation_level``): the curve-summary
+  vector z = (J, log peak, band centroid, bandwidth, flatness) per HF
+  measurement (default, roadmap Phase 1.1), or only (J, sigma_J) with
+  ``"scalar"`` (the pre-1.1 behaviour, kept for A/B benchmarking);
+- the **low-fidelity physics channel** (roadmap Phase 1.2, enabled by
+  ``Step5Config.lf_channel = "physics"``): reflectivity/group-delay
+  summaries of cheap RF measurements, modelled through the simulator as
+  ``y_l = S_l(u, theta) + r_l + eps`` — exactly the structure of the
+  design note's section 12 — so LF data constrain theta *jointly* with
+  HF data instead of through a statistical link.  The affine LF->J link
+  remains as a fallback for proxies without a simulator counterpart.
 
-The joint model, per observation component k::
+The joint model, per observation component k of either channel::
 
     z_{i,k} = z_sim_k(u~_i, theta) + r_k(u~_i) + [k = J] d (t_i - t_ref)
               + eps_{i,k},
@@ -26,8 +28,12 @@ analytically inside the objective — the discrepancy channel is present
 *while* theta is inferred, never fitted afterwards), the linear drift
 term acts on the objective component, and one shared dimensionless
 noise-inflation factor ``s`` scales with each component's typical
-measurement sigma.  Cross-component measurement correlations are
-neglected at Level A (documented approximation).
+measurement sigma.  Discrepancy amplitude priors are floored at a few
+measurement sigmas (``discrepancy_sigma_floor``) so unmodelled
+systematics (curve tilt, reflectivity mis-calibration, cable-delay
+offset) stay in the discrepancy channel rather than biasing theta.
+Cross-component measurement correlations are neglected at Level A
+(documented approximation).
 
 Uncertainty for (theta, drift) comes from a Laplace approximation around
 the joint MAP; a prior-sensitivity refit flags weakly identifiable
@@ -49,12 +55,22 @@ from ..gp import GaussianProcess, fit_gp_hyperparameters
 from ..objectives import Objective
 from ..records import CalibrationDataset
 from ..simulator import BoostSimulator, DetectorState
-from ..summaries import CurveSummarizer
+from ..summaries import (
+    REFLECTIVITY_SUMMARY_NAMES,
+    SUMMARY_NAMES,
+    CurveSummarizer,
+    ReflectivitySummarizer,
+)
 
 
 @dataclass
 class LFLinkModel:
-    """Learned affine relation between the LF proxy and the HF objective."""
+    """Learned affine relation between a scalar LF proxy and the HF objective.
+
+    Retained as the fallback for proxies without a simulator counterpart;
+    when the physics LF channel is active (``Step5Result.lf_channel ==
+    "physics"``) this link is not used for decisions.
+    """
 
     alpha: float = 1.0
     beta: float = 0.0
@@ -70,12 +86,25 @@ class LFLinkModel:
 
 
 @dataclass
+class _Channel:
+    """One observation channel of the joint fit."""
+
+    label: str                      # "hf" | "lf"
+    names: tuple                    # component names (globally unique)
+    x: np.ndarray                   # (n, d) normalized inputs
+    z: np.ndarray                   # (n, K) observations
+    sigma: np.ndarray               # (n, K) measurement sigmas
+    dt: np.ndarray                  # (n,) hours since t_ref (drift term)
+    drift_component: str | None     # component name carrying the drift term
+
+
+@dataclass
 class Step5Result:
     """Joint model state M_t handed to Step 6 (design, section 21).
 
     ``gp`` is the discrepancy GP of the objective component (what Step 6
-    consumes for J-prediction); the per-summary discrepancy GPs live in
-    ``summary_gps``.
+    consumes for J-prediction); all per-component discrepancy GPs —
+    including the LF reflectivity ones — live in ``summary_gps``.
     """
 
     theta_map: DetectorState
@@ -88,6 +117,8 @@ class Step5Result:
     x_train: np.ndarray
     residual_noise_sd: np.ndarray       # J-component effective noise
     observation_level: str = "scalar"
+    lf_channel: str = "none"            # "physics" | "affine" | "none"
+    n_lf_physics: int = 0
     summary_names: tuple = ("J",)
     summary_gps: dict = field(default_factory=dict)
     classification: dict = field(default_factory=dict)   # name -> "correctable"|"diagnostic"
@@ -107,7 +138,7 @@ def _prepare_hf_data(
     control_map: ControlMap,
     want_summaries: bool,
 ):
-    """Assemble the (n x K) observation matrix and its uncertainties.
+    """Assemble the HF (n x K) observation matrix and its uncertainties.
 
     Falls back to the scalar level (K = 1) when any HF record lacks
     summaries; the fallback is reported through the returned level.
@@ -118,8 +149,6 @@ def _prepare_hf_data(
     t = np.array([r.time for r in recs])
 
     if want_summaries and all(r.summaries is not None and r.summaries_sigma is not None for r in recs):
-        from ..summaries import SUMMARY_NAMES
-
         z = np.stack([r.summaries for r in recs])
         sig = np.stack([np.clip(r.summaries_sigma, 1e-12, None) for r in recs])
         names = tuple(SUMMARY_NAMES)
@@ -145,46 +174,85 @@ def run_step5(
     rng = rng or np.random.default_rng(0)
     cfg5 = config.step5
     want_summaries = cfg5.observation_level == "curve_summary"
-    recs, u_data, x_data, z_data, sigma_data, t_data, names, level = _prepare_hf_data(
+    recs, u_hf, x_hf, z_hf, sig_hf, t_hf, hf_names, level = _prepare_hf_data(
         dataset, control_map, want_summaries
     )
-    n, n_comp = z_data.shape
-    if n < cfg5.min_hf_points_for_inference:
+    n_hf = len(recs)
+    if n_hf < cfg5.min_hf_points_for_inference:
         raise ValueError(
-            f"need >= {cfg5.min_hf_points_for_inference} valid HF points, have {n}"
+            f"need >= {cfg5.min_hf_points_for_inference} valid HF points, have {n_hf}"
         )
-    j_idx = names.index("J")
+    t_ref = float(np.min(t_hf))
 
-    # Per-component scales: typical measurement sigma (noise-inflation
-    # scale) and response scale (discrepancy-amplitude prior scale).
-    meas_scale = np.median(sigma_data, axis=0)                        # (K,)
-    response_scale = np.maximum(np.mean(np.abs(z_data), axis=0), 5.0 * meas_scale)
-    j_scale = float(response_scale[j_idx])
-    t_ref = float(np.min(t_data))
-    dt = t_data - t_ref
+    channels = [
+        _Channel(
+            label="hf", names=hf_names, x=x_hf, z=z_hf, sigma=sig_hf,
+            dt=t_hf - t_ref, drift_component="J",
+        )
+    ]
 
+    # ---- LF physics channel (roadmap Phase 1.2) --------------------------
+    lf_phys_recs = []
+    if cfg5.lf_channel == "physics":
+        lf_phys_recs = [
+            r
+            for r in dataset.lf_records()
+            if r.summaries is not None
+            and r.summaries_sigma is not None
+            and r.observable_id == "reflectivity"
+        ]
+    refl_summarizer = ReflectivitySummarizer(simulator.freqs) if lf_phys_recs else None
+    if lf_phys_recs:
+        u_lf = np.stack([r.u_B_achieved for r in lf_phys_recs])
+        channels.append(
+            _Channel(
+                label="lf",
+                names=tuple(REFLECTIVITY_SUMMARY_NAMES),
+                x=np.stack([control_map.to_normalized(r.u_B_achieved) for r in lf_phys_recs]),
+                z=np.stack([r.summaries for r in lf_phys_recs]),
+                sigma=np.stack([np.clip(r.summaries_sigma, 1e-12, None) for r in lf_phys_recs]),
+                dt=np.array([r.time for r in lf_phys_recs]) - t_ref,
+                drift_component=None,
+            )
+        )
+
+    # ---- per-component scales and priors ---------------------------------
     prior_sd = np.array(
         [cfg5.prior_sd_z_offset, cfg5.prior_sd_compression, cfg5.prior_sd_log_loss]
     )
-    # Amplitude priors: a fraction of the response scale, floored at a few
-    # measurement sigmas so systematics can live in the discrepancy channel
-    # rather than biasing theta (see Step5Config.discrepancy_sigma_floor).
-    amp_priors = np.maximum(
-        cfg5.discrepancy_amplitude_prior * response_scale,
-        cfg5.discrepancy_sigma_floor * meas_scale,
-    )
+    meas_scale: dict[str, float] = {}
+    response_scale: dict[str, float] = {}
+    amp_prior: dict[str, float] = {}
+    for ch in channels:
+        for k, nm in enumerate(ch.names):
+            ms = float(np.median(ch.sigma[:, k]))
+            rs = max(float(np.mean(np.abs(ch.z[:, k]))), 5.0 * ms)
+            meas_scale[nm] = ms
+            response_scale[nm] = rs
+            # Fraction of the response scale, floored at a few measurement
+            # sigmas (Step5Config.discrepancy_sigma_floor).
+            amp_prior[nm] = max(
+                cfg5.discrepancy_amplitude_prior * rs,
+                cfg5.discrepancy_sigma_floor * ms,
+            )
+    j_scale = response_scale["J"]
     ls_lo, ls_hi = cfg5.discrepancy_lengthscale_bounds
 
     summarizer = CurveSummarizer(objective, simulator.freqs) if level == "curve_summary" else None
 
-    def sim_z(theta_std: np.ndarray) -> np.ndarray:
-        """(n x K) simulator prediction at standardized theta."""
-        theta = DetectorState.from_vector(theta_std * prior_sd)
-        if summarizer is not None:
-            return np.stack(
-                [simulator.predict_summaries(ui, theta, summarizer) for ui in u_data]
-            )
-        return np.array([[simulator.predict_J(ui, theta, objective)] for ui in u_data])
+    def sim_channel(ch: _Channel, theta: DetectorState) -> np.ndarray:
+        if ch.label == "hf":
+            if summarizer is not None:
+                return np.stack(
+                    [simulator.predict_summaries(ui, theta, summarizer) for ui in u_hf]
+                )
+            return np.array([[simulator.predict_J(ui, theta, objective)] for ui in u_hf])
+        return np.stack(
+            [
+                simulator.predict_reflectivity_summaries(ui, theta, refl_summarizer)
+                for ui in u_lf
+            ]
+        )
 
     # Parameter vector (standardized): [theta (3), drift, log noise-inflation].
     def unpack(p: np.ndarray):
@@ -193,82 +261,112 @@ def run_step5(
         s = np.exp(p[4]) * cfg5.noise_inflation_prior   # dimensionless factor
         return theta_std, drift, s
 
-    def neg_log_post(p: np.ndarray, gp_hypers: list) -> float:
+    def residuals(ch: _Channel, pred: np.ndarray, k: int, drift: float) -> np.ndarray:
+        resid = ch.z[:, k] - pred[:, k]
+        if ch.drift_component is not None and ch.names[k] == ch.drift_component:
+            resid = resid - drift * ch.dt
+        return resid
+
+    def neg_log_post(p: np.ndarray, gp_hypers: dict) -> float:
         theta_std, drift, s = unpack(p)
-        try:
-            pred = sim_z(theta_std)
-        except (np.linalg.LinAlgError, FloatingPointError):
-            return 1e12
+        theta = DetectorState.from_vector(theta_std * prior_sd)
         total = 0.5 * float(np.sum(theta_std**2)) + 0.5 * p[3] ** 2 + 0.5 * np.exp(2 * p[4])
-        for k in range(n_comp):
-            resid = z_data[:, k] - pred[:, k]
-            if k == j_idx:
-                resid = resid - drift * dt
-            noise = np.sqrt(sigma_data[:, k] ** 2 + (s * meas_scale[k]) ** 2)
-            amp, ls = gp_hypers[k]
-            gp = GaussianProcess(amplitude=amp, lengthscales=np.full(x_data.shape[1], ls))
+        for ch in channels:
             try:
-                gp.fit(x_data, resid, noise)
-                total -= gp.log_marginal_likelihood()
-            except np.linalg.LinAlgError:
+                pred = sim_channel(ch, theta)
+            except (np.linalg.LinAlgError, FloatingPointError):
                 return 1e12
+            for k, nm in enumerate(ch.names):
+                resid = residuals(ch, pred, k, drift)
+                noise = np.sqrt(ch.sigma[:, k] ** 2 + (s * meas_scale[nm]) ** 2)
+                amp, ls = gp_hypers[nm]
+                gp = GaussianProcess(amplitude=amp, lengthscales=np.full(ch.x.shape[1], ls))
+                try:
+                    gp.fit(ch.x, resid, noise)
+                    total -= gp.log_marginal_likelihood()
+                except np.linalg.LinAlgError:
+                    return 1e12
         return total
 
-    # Warm start from the previous posterior state (component-matched).
-    default_hyper = lambda k: (0.5 * amp_priors[k], 0.5 * (ls_lo + ls_hi))  # noqa: E731
+    # Warm start from the previous posterior state (matched by name).
+    def default_hyper(nm: str):
+        return (0.5 * amp_prior[nm], 0.5 * (ls_lo + ls_hi))
+
+    all_names = [nm for ch in channels for nm in ch.names]
     if previous is not None:
         p0 = np.concatenate(
             [
                 previous.theta_map.to_vector() / prior_sd,
                 [previous.drift_rate / cfg5.drift_rate_prior],
-                [np.log(max(previous.noise_inflation / max(cfg5.noise_inflation_prior * meas_scale[j_idx], 1e-15), 1e-3))],
+                [np.log(max(previous.noise_inflation / max(cfg5.noise_inflation_prior * meas_scale["J"], 1e-15), 1e-3))],
             ]
         )
         prev_gps = dict(previous.summary_gps)
         prev_gps.setdefault("J", previous.gp)
-        gp_hypers = [
-            (prev_gps[nm].amplitude, float(prev_gps[nm].lengthscales[0]))
-            if nm in prev_gps and previous.summary_names == names
-            else default_hyper(k)
-            for k, nm in enumerate(names)
-        ]
+        gp_hypers = {
+            nm: (
+                (prev_gps[nm].amplitude, float(prev_gps[nm].lengthscales[0]))
+                if nm in prev_gps
+                else default_hyper(nm)
+            )
+            for nm in all_names
+        }
     else:
         p0 = np.array([0.0, 0.0, 0.0, 0.0, -1.0])
-        gp_hypers = [default_hyper(k) for k in range(n_comp)]
+        gp_hypers = {nm: default_hyper(nm) for nm in all_names}
 
     bounds = [(-5, 5)] * 3 + [(-5, 5), (-4, 2)]
 
     # Alternate: (a) MAP over (theta, drift, noise) given GP hypers,
     # (b) penalized ML-II refit of each component's GP hypers on its
-    # residuals.  Two rounds suffice with the warm start.
+    # residuals.  Two rounds suffice with the warm start.  Every MAP
+    # round is multi-started (current point + prior mean): the joint
+    # landscape can grow a spurious runaway mode at the edge of the loss
+    # prior — observed directly in Phase-1.2 validation — and the
+    # alternation can co-adapt into it if a round is started only from
+    # the previous round's solution.
+    prior_mean_start = np.array([0.0, 0.0, 0.0, 0.0, -1.0])
     res = None
     for _ in range(2):
-        res = minimize(
-            neg_log_post, p0, args=(gp_hypers,), method="L-BFGS-B",
-            bounds=bounds, options={"maxiter": 60},
-        )
+        starts = [p0]
+        if float(np.max(np.abs(p0 - prior_mean_start))) > 1e-9:
+            starts.append(prior_mean_start)
+        best = None
+        for start in starts:
+            cand = minimize(
+                neg_log_post, start, args=(gp_hypers,), method="L-BFGS-B",
+                bounds=bounds, options={"maxiter": 60},
+            )
+            if best is None or cand.fun < best.fun:
+                best = cand
+        res = best
         p0 = res.x
         theta_std, drift, s = unpack(p0)
-        pred = sim_z(theta_std)
-        new_hypers = []
-        for k in range(n_comp):
-            resid = z_data[:, k] - pred[:, k]
-            if k == j_idx:
-                resid = resid - drift * dt
-            noise = np.sqrt(sigma_data[:, k] ** 2 + (s * meas_scale[k]) ** 2)
-            gp_fitted = fit_gp_hyperparameters(
-                x_data, resid, noise,
-                amplitude_bounds=(1e-4 * response_scale[k], 10 * amp_priors[k]),
-                lengthscale_bounds=(ls_lo, ls_hi),
-                amplitude_prior_sd=amp_priors[k],
-                seed=config.seed + k,
-            )
-            new_hypers.append((gp_fitted.amplitude, float(gp_fitted.lengthscales[0])))
+        theta = DetectorState.from_vector(theta_std * prior_sd)
+        new_hypers = {}
+        seed_offset = 0
+        for ch in channels:
+            pred = sim_channel(ch, theta)
+            for k, nm in enumerate(ch.names):
+                resid = residuals(ch, pred, k, drift)
+                noise = np.sqrt(ch.sigma[:, k] ** 2 + (s * meas_scale[nm]) ** 2)
+                # Amplitude ceiling at 4 prior sds: with very few points the
+                # marginal likelihood alone cannot rule out runaway
+                # discrepancy explanations (weak Occam factor at small n).
+                gp_fitted = fit_gp_hyperparameters(
+                    ch.x, resid, noise,
+                    amplitude_bounds=(1e-4 * response_scale[nm], 4 * amp_prior[nm]),
+                    lengthscale_bounds=(ls_lo, ls_hi),
+                    amplitude_prior_sd=amp_prior[nm],
+                    seed=config.seed + seed_offset,
+                )
+                new_hypers[nm] = (gp_fitted.amplitude, float(gp_fitted.lengthscales[0]))
+                seed_offset += 1
         gp_hypers = new_hypers
 
     theta_std, drift, s = unpack(res.x)
     theta_map = DetectorState.from_vector(theta_std * prior_sd)
-    s_extra_j = float(s * meas_scale[j_idx])   # absolute, J units
+    s_extra_j = float(s * meas_scale["J"])   # absolute, J units
 
     # Laplace covariance for (theta, drift) by finite-difference Hessian.
     def nlp_sub(q: np.ndarray) -> float:
@@ -300,20 +398,21 @@ def run_step5(
     drift_sd = float(np.sqrt(cov_full[3, 3]))
 
     # Final per-component discrepancy GPs conditioned at the MAP.
-    pred = sim_z(theta_std)
     summary_gps: dict[str, GaussianProcess] = {}
     noise_j = None
-    for k, nm in enumerate(names):
-        resid = z_data[:, k] - pred[:, k]
-        if k == j_idx:
-            resid = resid - drift * dt
-        noise = np.sqrt(sigma_data[:, k] ** 2 + (s * meas_scale[k]) ** 2)
-        amp, ls = gp_hypers[k]
-        gp_k = GaussianProcess(amplitude=amp, lengthscales=np.full(x_data.shape[1], ls))
-        gp_k.fit(x_data, resid, noise)
-        summary_gps[nm] = gp_k
-        if k == j_idx:
-            noise_j = noise
+    resid_j = None
+    for ch in channels:
+        pred = sim_channel(ch, theta_map)
+        for k, nm in enumerate(ch.names):
+            resid = residuals(ch, pred, k, drift)
+            noise = np.sqrt(ch.sigma[:, k] ** 2 + (s * meas_scale[nm]) ** 2)
+            amp, ls = gp_hypers[nm]
+            gp_k = GaussianProcess(amplitude=amp, lengthscales=np.full(ch.x.shape[1], ls))
+            gp_k.fit(ch.x, resid, noise)
+            summary_gps[nm] = gp_k
+            if nm == "J":
+                noise_j = noise
+                resid_j = resid
     gp = summary_gps["J"]
 
     # ---- classification: correctable vs diagnostic (section 8) ----------
@@ -325,7 +424,7 @@ def run_step5(
     # ---- identifiability: prior-sensitivity check (section 15.2) --------
     identifiability = {name: "ok" for name in DetectorState.NAMES}
     if cfg5.prior_sensitivity_check:
-        wide_hypers = [(3.0 * amp, ls) for amp, ls in gp_hypers]
+        wide_hypers = {nm: (3.0 * amp, ls) for nm, (amp, ls) in gp_hypers.items()}
         res_wide = minimize(
             neg_log_post, res.x, args=(wide_hypers,), method="L-BFGS-B",
             bounds=bounds, options={"maxiter": 40},
@@ -336,13 +435,16 @@ def run_step5(
             if shift[i] > 1.0 * max(theta_sd[i], 1e-12):
                 identifiability[name] = "weak"
 
-    # ---- LF proxy link model (section 12) --------------------------------
-    lf_link = LFLinkModel()
-    lf_recs = dataset.lf_records()
-    if len(lf_recs) >= 3:
+    # ---- LF link model: affine fallback only (section 12) ----------------
+    lf_channel = "physics" if lf_phys_recs else "none"
+    lf_link = LFLinkModel(n_points=len(lf_phys_recs))
+    lf_scalar_recs = [
+        r for r in dataset.lf_records() if r.proxy_value is not None
+    ]
+    if not lf_phys_recs and cfg5.lf_channel != "off" and len(lf_scalar_recs) >= 3:
         mu_at_lf = []
         y_lf = []
-        for r in lf_recs:
+        for r in lf_scalar_recs:
             x_r = control_map.to_normalized(r.u_B_achieved)
             m, _ = gp.predict(x_r[None, :])
             mu_at_lf.append(
@@ -363,14 +465,14 @@ def run_step5(
             n_points=len(y_lf),
             validated=bool(coef[0] > 0 and rsd < max(abs(coef[0]) * spread, 1e-12)),
         )
+        lf_channel = "affine"
 
     # ---- diagnostics -----------------------------------------------------
-    resid_j = z_data[:, j_idx] - pred[:, j_idx] - drift * dt
     z_std = resid_j / noise_j
-    gp_mean_train, _ = gp.predict(x_data)
+    gp_mean_train, _ = gp.predict(x_hf)
     z_after = (resid_j - gp_mean_train) / noise_j
     discrepancy_dominant = bool(
-        gp.amplitude > 2.0 * amp_priors[j_idx] and np.std(resid_j) > 2.0 * np.mean(noise_j)
+        gp.amplitude > 2.0 * amp_prior["J"] and np.std(resid_j) > 2.0 * np.mean(noise_j)
     )
     baseline = dataset.baseline_records()
     baseline_drift = None
@@ -382,15 +484,17 @@ def run_step5(
 
     diagnostics = {
         "observation_level": level,
-        "n_hf": n,
-        "n_lf": len(lf_recs),
-        "n_components": n_comp,
+        "lf_channel": lf_channel,
+        "n_hf": n_hf,
+        "n_lf": len(dataset.lf_records()),
+        "n_lf_physics": len(lf_phys_recs),
+        "n_components": len(all_names),
         "j_scale": j_scale,
         "max_abs_standardized_residual": float(np.max(np.abs(z_std))),
         "rms_standardized_residual_after_gp": float(np.sqrt(np.mean(z_after**2))),
         "discrepancy_amplitude": gp.amplitude,
-        "discrepancy_amplitude_prior": float(amp_priors[j_idx]),
-        "discrepancy_amplitudes": {nm: summary_gps[nm].amplitude for nm in names},
+        "discrepancy_amplitude_prior": float(amp_prior["J"]),
+        "discrepancy_amplitudes": {nm: summary_gps[nm].amplitude for nm in all_names},
         "discrepancy_dominant": discrepancy_dominant,
         "noise_inflation": s_extra_j,
         "noise_inflation_factor": float(s),
@@ -412,10 +516,12 @@ def run_step5(
         noise_inflation=s_extra_j,
         gp=gp,
         t_ref=t_ref,
-        x_train=x_data,
+        x_train=x_hf,
         residual_noise_sd=noise_j,
         observation_level=level,
-        summary_names=names,
+        lf_channel=lf_channel,
+        n_lf_physics=len(lf_phys_recs),
+        summary_names=tuple(all_names),
         summary_gps=summary_gps,
         classification=classification,
         identifiability=identifiability,

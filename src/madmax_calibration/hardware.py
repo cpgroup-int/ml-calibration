@@ -61,8 +61,16 @@ class HardwareInterface(abc.ABC):
         """
 
     @abc.abstractmethod
-    def measure_lf_proxy(self) -> tuple[float, float, bool]:
-        """Lower-fidelity scalar RF proxy: (value, sigma estimate, success)."""
+    def measure_lf_proxy(self):
+        """Lower-fidelity RF measurement at the current state.
+
+        Returns ``(refl, refl_sigma, gd, gd_sigma, success)``: the power
+        reflectivity ``abs(Gamma)**2(nu)`` and group delay ``tau_g(nu)``
+        [s] on the configured frequency grid with per-bin 1-sigma
+        estimates (roadmap Phase 1.2: the LF channel is a physics
+        observable the simulator can predict, not an abstract proxy
+        scalar).
+        """
 
     @abc.abstractmethod
     def advance_time(self, hours: float) -> None:
@@ -87,6 +95,10 @@ class MockTruth:
     # xi in [-1, 1] (unmodelled 3D/receiver-chain effects).
     discrepancy_tilt: float = 0.04
     drift_rate_z: float = 2e-6        # stack z-offset drift [m / hour]
+    # LF-channel systematics: reflectivity amplitude mis-calibration and a
+    # constant group-delay offset (uncalibrated cable delay).
+    refl_calibration_bias: float = 0.01
+    gd_delay_offset: float = 20e-12   # [s]
 
 
 @dataclass
@@ -95,7 +107,8 @@ class NoiseModel:
 
     hf_norm_jitter: float = 0.01      # shared relative normalization noise
     hf_bin_noise: float = 0.01        # independent relative per-bin noise
-    lf_rel_noise: float = 0.05        # relative noise of the LF proxy
+    lf_refl_noise: float = 0.005      # absolute per-bin noise on |Gamma|^2
+    lf_gd_noise: float = 20e-12       # per-bin group-delay noise [s]
     actuator_repeatability: float = 5e-6     # [m] per booster coordinate
     actuator_hysteresis: float = 10e-6       # [m] direction-dependent bias
     readback_noise: float = 2e-6             # [m]
@@ -124,9 +137,6 @@ class MockHardware(HardwareInterface):
         self._u_B_achieved = np.zeros(dim)
         self._u_A_cmd = np.zeros(2)
         self._u_A_achieved = np.zeros(2)
-        # LF proxy: affine function of the true objective (bias + scale).
-        self.lf_scale = 0.85
-        self.lf_offset_frac = 0.05
         self.n_hf_calls = 0
         self.n_lf_calls = 0
 
@@ -232,16 +242,28 @@ class MockHardware(HardwareInterface):
         sigma = measured * np.sqrt(self.noise.hf_norm_jitter**2 + self.noise.hf_bin_noise**2)
         return measured, np.clip(sigma, 1e-12, None), True
 
-    def measure_lf_proxy(self) -> tuple[float, float, bool]:
-        """Scalar RF proxy: affine in the true objective, cheap and noisy."""
-        from .objectives import Objective
+    def measure_lf_proxy(self):
+        """Reflectivity + group-delay measurement of the true stack.
 
+        The true complex reflection is computed at the achieved geometry
+        with the drifted true detector state, then degraded by the
+        instrument: a constant amplitude mis-calibration and cable-delay
+        offset (systematics for the LF discrepancy channel to absorb)
+        plus per-bin noise.
+        """
         self.n_lf_calls += 1
         self.advance_time(self.config.cost.lf_measurement)
+        n_bins = len(self.simulator.freqs)
         if self._soft_failure():
-            return 0.0, 1.0, False
-        obj = Objective(self.config.objective)
-        j_true = obj(self._true_curve())
-        value = self.lf_scale * j_true + self.lf_offset_frac * abs(j_true)
-        sigma = max(self.noise.lf_rel_noise * abs(j_true), 1e-6)
-        return float(value + sigma * self.rng.standard_normal()), float(sigma), True
+            zeros = np.zeros(n_bins)
+            return zeros, zeros + 1.0, zeros, zeros + 1.0, False
+        refl_true, gd_true = self.simulator.reflectivity_observables(
+            self._u_B_achieved, self._theta_now()
+        )
+        refl = refl_true * (1.0 + self.truth.refl_calibration_bias)
+        refl = refl + self.noise.lf_refl_noise * self.rng.standard_normal(n_bins)
+        gd = gd_true + self.truth.gd_delay_offset
+        gd = gd + self.noise.lf_gd_noise * self.rng.standard_normal(n_bins)
+        refl_sigma = np.full(n_bins, self.noise.lf_refl_noise)
+        gd_sigma = np.full(n_bins, self.noise.lf_gd_noise)
+        return np.clip(refl, 0.0, None), refl_sigma, gd, gd_sigma, True
