@@ -82,6 +82,15 @@ print(result.step5.theta_map)    # inferred detector-state parameters
 (`build_default_loop(seed=0)` remains as a shorthand: it uses the
 repository settings file when present.)
 
+To use the amortized neural-posterior inference engine (roadmap Phase 2 —
+calibrated, ~3× faster), set `inference_engine = "amortized_npe"` in the
+settings file (the shipped `weights/npe_prototype.npz` covers window 1 of
+the prototype). Retrain for another window or control basis with:
+
+```bash
+python examples/train_npe.py --window window_07 --out weights/npe_window07.npz
+```
+
 Assembling the pieces explicitly — which is what you will do when
 substituting the real simulator and detector control — looks like this:
 

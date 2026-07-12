@@ -192,40 +192,52 @@ it is worth it). Depends on 1.2; the VoI layer (Phase 3) prices it.
 **Decision:** go directly to modern amortized SBI (neural posterior
 estimation, NPE) as the Step-5 engine, replacing joint MAP + Laplace.
 
-### 2.1 Amortized NPE for the detector state  *(effort: L)*
+### 2.1 Amortized NPE for the detector state  *(effort: L)* — ✅ implemented
 
-- **Training (offline, per campaign):** simulate large batches of
-  (θ, u, window) → observable summaries (Phase-1 curve summaries and
-  reflectivity summaries), and train a conditional neural density
-  estimator q(θ | summaries, u, window). Condition on the window index
-  or the nominal q0(W) so *one* network serves all ~12 windows between
-  18 and 24 GHz.
-- **Misspecification robustness:** the real detector is *not* the
-  simulator. Two mandatory mitigations: (i) inject the stochastic
-  discrepancy model (GP-sampled r, noise inflation, drift draws) into
-  the training simulations so the amortized posterior is trained to be
-  appropriately wide under model error; (ii) adopt a robust-NPE variant
-  for outlier-resistant conditioning. The online GP discrepancy on the
-  objective residual is *kept* — NPE handles θ, the discrepancy channel
-  keeps absorbing what θ cannot explain.
-- **Online use:** posterior evaluation is a millisecond forward pass —
-  Step 5 becomes trivially cheap per iteration, and
-  `Step5Result.theta_samples` is now exact sampling from the amortized
-  posterior instead of a Gaussian Laplace draw. The Step-6 interface is
-  unchanged by design.
-- **Dependency hygiene:** training uses a standard SBI stack (e.g. the
-  `sbi` toolkit / PyTorch) as an *offline, optional* dependency; the
-  trained network is exported to plain weights so the online loop keeps
-  its numpy/scipy-only runtime.
+- **Network (as implemented):** a compact mixture-density network
+  (`madmax_calibration.amortized`) — two tanh layers into a diagonal
+  Gaussian mixture over standardized θ — trained offline against the
+  simulator and evaluated online in ~0.1 ms. It is written in **pure
+  numpy** (forward, sampling, and hand-derived-gradient Adam training),
+  so no PyTorch/SBI stack is needed even offline, and weights export to
+  a plain `.npz` blob for a numpy-only online runtime.
+- **Conditioning:** θ is global while measurements land at arbitrary u,
+  so the network conditions on a fixed-length, permutation-invariant
+  residual-projection summary (each measurement's residual-vs-nominal
+  projected onto its design, averaged) covering any number of HF and LF
+  measurements. Window features append cleanly for Phase 5.
+- **Misspecification robustness:** training injects a shared per-episode
+  systematic bias into the summaries so the posterior is trained wide
+  under model error. The online discrepancy GPs are **kept** — NPE
+  handles θ; drift/noise and the per-channel discrepancy GPs are then
+  fit at the NPE estimate (the hybrid the roadmap specified).
+- **Online use:** `Step5Result.theta_samples` is now exact mixture
+  sampling; the Step-6 interface is unchanged; Step 5 is ~3× faster
+  (no L-BFGS + finite-difference Hessian).
 
-### 2.2 Calibration validation of the posterior  *(effort: M)*
+**Acceptance (measured, benchmark 3 seeds, joint_map vs amortized_npe):**
+equal-or-better validated improvement (0.073 → 0.080) at equal HF count,
+3/3 significant, 100% safety/budget; ~3× faster inference; posterior
+coverage 0.96 → 1.00 (honestly calibrated, often wider, vs the
+overconfident Laplace on the degeneracy ridge). Kept **opt-in** (default
+`joint_map`) because the weights are basis/window-specific — the shipped
+`weights/npe_prototype.npz` is for window 1; a dimension guard falls back
+to joint_map on mismatch, and window-conditioned amortization is Phase 5.
 
-Replace Laplace-specific tests with simulation-based calibration (SBC)
-and empirical coverage checks in the benchmark harness: rank-uniformity
-of true θ under the amortized posterior across the mock-truth ensemble,
-including under injected discrepancy. The observed failure mode of the
-current engine — overconfident uncertainty on the degeneracy ridge — is
-the explicit regression target.
+**Not carried over from the sketch:** a separate PyTorch/`sbi`
+dependency (the pure-numpy MDN made it unnecessary) and one-network-for-
+all-windows conditioning (deferred to Phase 5 with the transfer work).
+
+### 2.2 Calibration validation of the posterior  *(effort: M)* — ✅ implemented
+
+Simulation-based calibration (`madmax_calibration.sbc`): rank-uniformity
+of the true θ among posterior samples plus empirical 1/2-σ coverage,
+run **with and without** injected discrepancy. On the shipped weights the
+well-specified case is calibrated (rank KS p > 0.3, 2σ coverage
+0.93–0.95) and degrades gracefully to ~0.9 under injected systematics.
+The overconfidence of the Laplace engine on the degeneracy ridge is the
+explicit regression target; SBC is now the acceptance instrument for the
+amortized engine (tests in `tests/test_amortized.py`).
 
 ---
 

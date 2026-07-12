@@ -153,6 +153,15 @@ class Step1Config:
 class Step5Config:
     """Joint inference settings (Step 5 design, section 13.1: Level A)."""
 
+    # Detector-state inference engine (roadmap Phase 2):
+    #   "joint_map"     — joint MAP + Laplace over (theta, drift, noise);
+    #   "amortized_npe" — amortized neural posterior estimate of theta
+    #                     (calibrated, millisecond, hybrid with the online
+    #                     discrepancy GPs), loaded from npe_weights_path.
+    # Falls back to joint_map (with a diagnostic) if the weights are
+    # missing or the observation level is not curve_summary.
+    inference_engine: str = "joint_map"
+    npe_weights_path: str | None = None   # None -> weights/npe_prototype.npz
     # Observation level (Step 5 design, section 4): "curve_summary" fits
     # the vector of curve summaries (J, log peak, centroid, bandwidth,
     # flatness); "scalar" fits only J (the pre-Phase-1.1 behaviour, kept

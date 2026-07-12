@@ -56,6 +56,7 @@ class RunResult:
     n_hf: int
     n_lf: int
     hours: float
+    engine: str
     coverage_2sigma: float | None
     rms_standardized_residual: float | None
     theta_z_error: float | None       # |estimate - truth| of the stack offset [m]
@@ -88,8 +89,10 @@ class BenchmarkSummary:
         tz_sd = self._values("theta_z_sd")
         tc_err = self._values("theta_c_error")
         tc_sd = self._values("theta_c_sd")
+        engines = {r.engine for r in self.runs}
         return {
             "label": self.label,
+            "engine": next(iter(engines)) if len(engines) == 1 else "mixed",
             "runs": len(self.runs),
             "improvement": f"{imp.mean():.3f} ± {imp.std(ddof=1):.3f}" if len(imp) > 1 else f"{imp.mean():.3f}",
             "significant": f"{int(sig.sum())}/{len(sig)}",
@@ -225,6 +228,7 @@ def run_one(
         n_hf=counts["hf"],
         n_lf=counts["lf"],
         hours=loop.hardware.now,
+        engine=result.step5.inference_engine if result.step5 is not None else "n/a",
         coverage_2sigma=coverage,
         rms_standardized_residual=rms_z,
         theta_z_error=tz_err,
