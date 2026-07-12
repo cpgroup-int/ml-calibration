@@ -222,6 +222,36 @@ class Step1Proposer:
         p_soft = self.soft.probability_feasible(x_norm)
         costs = np.array([self.expected_cost(u, Fidelity.HF, current_achieved) for u in cands])
 
+        # Identification-first rule (roadmap Phase 1.2; a minimal version of
+        # the Phase-3.4 design): while the physics LF channel has fewer than
+        # `min_lf_identification` measurements, spend cheap reflectivity
+        # probes before new HF candidates — they constrain theta at ~1/10
+        # of the HF cost.
+        if self.config.step5.lf_channel == "physics" and budget.can_afford_lf():
+            n_lf_phys = sum(
+                1
+                for r in dataset.lf_records()
+                if r.observable_id == "reflectivity"
+            )
+            if n_lf_phys < cfg1.min_lf_identification:
+                i_info = int(np.argmax(info * p_soft / costs))
+                return Proposal(
+                    action=ActionType.LF_PROBE,
+                    fidelity=Fidelity.LF_PROXY,
+                    u_B=cands[i_info],
+                    predicted_mean=float(pred.latent_mean[i_info]),
+                    predicted_sd=float(pred.latent_sd[i_info]),
+                    expected_cost=self.expected_cost(cands[i_info], Fidelity.LF_PROXY, current_achieved),
+                    soft_feasibility=float(p_soft[i_info]),
+                    trust_region_size=trust_region.size,
+                    reason=(
+                        f"identification: {n_lf_phys} < {cfg1.min_lf_identification} "
+                        "physics-channel LF measurements; probing reflectivity at the "
+                        "most informative feasible candidate"
+                    ),
+                    fallback="lf_identification",
+                )
+
         utility = ei + cfg1.lambda_info * info
         acq = utility * p_soft / costs
         acq[p_soft < cfg1.soft_feasibility_threshold] = -np.inf
@@ -251,10 +281,16 @@ class Step1Proposer:
                 ),
             )
 
-        # LF probe (section 13): information is cheap and the proxy link is
-        # validated (or still needs validation data).
+        # LF probe (section 13): information is cheap and the LF channel is
+        # informative — always with the physics channel (measurements
+        # constrain theta directly); with the affine fallback only while
+        # the link is validated or still needs validation data.
         link = model.step5.lf_link
-        if budget.can_afford_lf() and (link.validated or link.n_points < 3):
+        lf_cfg = self.config.step5.lf_channel
+        lf_informative = lf_cfg == "physics" or (
+            lf_cfg == "affine" and (link.validated or link.n_points < 3)
+        )
+        if budget.can_afford_lf() and lf_informative:
             i_info = int(np.argmax(info * p_soft / costs))
             u_sel = cands[i_info]
             return Proposal(

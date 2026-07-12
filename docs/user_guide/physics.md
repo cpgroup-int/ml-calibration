@@ -47,7 +47,27 @@ $$
 $$
 
 Dielectric loss enters through a complex index
-$n_d = n\,(1 - \tfrac{i}{2}\tan\delta \cdot e^{\theta_{\log loss}})$.
+$n_d = n\,(1 + \tfrac{i}{2}\tan\delta \cdot e^{\theta_{\log loss}})$ —
+with the $e^{+ikx}$ spatial phasor used throughout, absorption requires
+$\mathrm{Im}(n) > 0$ (an early sign error here was caught by the
+reflection solver's unitarity check, below).
+
+### The reflection solve (low-fidelity channel)
+
+The same matrix machinery with the axion source removed and a
+unit-amplitude wave incident from the antenna side yields the complex
+reflection coefficient $\Gamma(\nu)$
+({func}`~madmax_calibration.simulator._reflection_curves`), from which
+the LF channel observables follow: the power reflectivity
+$|\Gamma|^2(\nu)$ and the group delay
+$\tau_g = \tfrac{1}{2\pi}\, d\phi/d\nu$ (positive round-trip storage
+time in this convention). Two analytic anchors are enforced by the test
+suite: a **lossless stack in front of a perfect mirror reflects
+everything** ($|\Gamma|^2 = 1$ at every frequency — energy
+conservation), and with loss the dips below unity measure absorption
+directly, which is precisely why the reflectivity channel identifies
+the loss parameter that boost curves alone cannot separate from
+geometry.
 
 ### Analytic checks
 

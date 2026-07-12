@@ -33,6 +33,7 @@ def run_step4(
     baseline_or_incumbent: str | None = None,
     rng: np.random.Generator | None = None,
     summarizer=None,
+    refl_summarizer=None,
 ) -> MeasurementRecord:
     """Execute the measurement selected by Step 1 and return the record.
 
@@ -87,6 +88,7 @@ def run_step4(
             z, sigma_z = summarizer.with_uncertainty(curve, curve_sigma, rng=rng)
             record.summaries = z
             record.summaries_sigma = sigma_z
+            record.observable_id = "beta2"
             j, sigma_j = float(z[0]), float(sigma_z[0])
         else:
             j, sigma_j = objective.with_uncertainty(curve, curve_sigma, rng=rng)
@@ -103,16 +105,30 @@ def run_step4(
         if np.max(np.abs(post - record.u_B_achieved)) > 50e-6:
             record.quality_flags.append(QualityFlag.DRIFT_SUSPECTED)
     else:
-        value, sigma, success = hardware.measure_lf_proxy()
+        refl, refl_sigma, gd, gd_sigma, success = hardware.measure_lf_proxy()
         record.time_end = hardware.now
         record.cost_hours = hardware.now - cost0
         if not success:
             record.valid = False
             record.quality_flags.append(QualityFlag.MEASUREMENT_FAILED)
-            record.comments = "LF proxy measurement failed"
+            record.comments = "LF reflectivity measurement failed"
             return record
-        record.proxy_value = value
-        record.proxy_sigma = sigma
+        record.proxy_curves = {
+            "reflectivity": refl,
+            "reflectivity_sigma": refl_sigma,
+            "group_delay": gd,
+            "group_delay_sigma": gd_sigma,
+        }
+        # Scalar convenience value (mean power reflectivity).
+        record.proxy_value = float(np.mean(refl))
+        record.proxy_sigma = float(np.mean(refl_sigma) / np.sqrt(len(refl)))
+        if refl_summarizer is not None:
+            z, sigma_z = refl_summarizer.with_uncertainty(
+                refl, refl_sigma, gd, gd_sigma, rng=rng
+            )
+            record.summaries = z
+            record.summaries_sigma = sigma_z
+            record.observable_id = "reflectivity"
         record.quality_flags.append(QualityFlag.VALID_LOW_FIDELITY)
         # J_HF is explicitly NOT measured in this iteration (section 7.3):
         # record.J stays None.

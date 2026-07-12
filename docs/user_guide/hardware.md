@@ -26,7 +26,7 @@ class MyMadmaxHardware(HardwareInterface):
 | `booster_readback()` / `antenna_readback()` | Fresh readback without moving — used for post-measurement drift checks. | metres |
 | `measure_alignment_proxy() -> (value, sigma)` | The cheap coupling observable used by Step-3 alignment at the *current* state. Higher = better coupling. Must be fast — it is called ~10–20× per alignment. | arbitrary but consistent scale |
 | `measure_boost_factor() -> (curve, sigma, success)` | The existing gradient-method boost-factor determination at the current state: $\widehat{\beta^2}(\nu)$ on the configured frequency grid, a per-bin 1σ estimate, and a success flag. Return `success=False` rather than fabricated data on failure. | curve on `SimulatorConfig.frequency_grid()` |
-| `measure_lf_proxy() -> (value, sigma, success)` | One scalar lower-fidelity observable informative about the objective (reflectivity/group-delay/coupling proxy). | scalar |
+| `measure_lf_proxy() -> (refl, refl_sigma, gd, gd_sigma, success)` | The lower-fidelity RF measurement: power reflectivity $\lvert\Gamma\rvert^2(\nu)$ and group delay $\tau_g(\nu)$ [s] on the configured frequency grid, with per-bin 1σ estimates. A *physics observable* the simulator can predict — this is what lets cheap RF data calibrate the detector state (roadmap Phase 1.2). | curves on `SimulatorConfig.frequency_grid()` |
 | `advance_time(hours)` / `now` | The loop's clock for drift modelling and budget accounting. On real hardware, back `now` with wall-clock time and make `advance_time` a no-op. | hours |
 
 ### Contract details that matter

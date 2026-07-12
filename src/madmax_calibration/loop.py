@@ -75,9 +75,10 @@ class CalibrationLoop:
         self.soft = SoftConstraintModel()
         self.rng = np.random.default_rng(self.config.seed)
         self.proposer = Step1Proposer(self.config, self.hard, self.soft, rng=self.rng)
-        from .summaries import CurveSummarizer
+        from .summaries import CurveSummarizer, ReflectivitySummarizer
 
         self.summarizer = CurveSummarizer(self.objective, simulator.freqs)
+        self.refl_summarizer = ReflectivitySummarizer(simulator.freqs)
         self.history: list[dict] = []
 
     # ------------------------------------------------------------------
@@ -166,6 +167,7 @@ class CalibrationLoop:
             baseline_or_incumbent=baseline_tag,
             rng=self.rng,
             summarizer=self.summarizer,
+            refl_summarizer=self.refl_summarizer,
         )
         self.dataset.append(record)
 
@@ -251,6 +253,8 @@ class CalibrationLoop:
                 > cfg.step7.improvement_noise_factor * model.hf_noise_sd
             ):
                 consecutive_unresolvable = 0
+            elif proposal.fallback == "lf_identification":
+                pass  # cheap identification probes do not count toward patience
             else:
                 consecutive_unresolvable += 1
 

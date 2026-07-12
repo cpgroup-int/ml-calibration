@@ -32,6 +32,17 @@ into one scalar. `"scalar"` selects the single-component special case
 (kept for A/B benchmarking); records lacking summaries trigger a
 diagnosed automatic fallback to it.
 
+With `Step5Config.lf_channel = "physics"` (default; roadmap Phase 1.2)
+a second observation channel joins the same joint fit: reflectivity/
+group-delay summaries of the cheap LF measurements, predicted by the
+simulator's reflection solve — the y_ℓ = S_ℓ(u, θ) + r_ℓ + ε structure
+of design §12, taken literally. This is what identifies the loss
+parameter and removes the geometry/loss quasi-degeneracy of boost-only
+data; the affine LF→J link survives only as a fallback for proxies
+without a simulator counterpart. See {doc}`../user_guide/statistics`
+for the mathematics and the multi-start/amplitude-cap stability
+safeguards.
+
 ## Update routine
 
 Following the design's §14:

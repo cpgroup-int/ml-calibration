@@ -142,6 +142,10 @@ class Step1Config:
     # baseline/incumbent HF measurement (drift-aware rule, section 17).
     rebaseline_after_hours: float = 12.0
     n_theta_samples: int = 8         # posterior samples used for prediction
+    # Minimal identify-first rule (superseded by the Phase-3.4 design):
+    # while fewer than this many valid physics-channel LF measurements
+    # exist, spend cheap LF probes before new HF candidates.
+    min_lf_identification: int = 3
     seed: int = 0
 
 
@@ -154,6 +158,12 @@ class Step5Config:
     # flatness); "scalar" fits only J (the pre-Phase-1.1 behaviour, kept
     # for A/B benchmarking).
     observation_level: str = "curve_summary"
+    # Low-fidelity channel (roadmap Phase 1.2): "physics" routes LF
+    # reflectivity/group-delay summaries through the simulator as
+    # y_l = S_l(u, theta) + r_l + eps, so cheap RF data constrain theta
+    # jointly with HF data; "affine" keeps only the scalar-link fallback;
+    # "off" ignores LF data in the joint fit.
+    lf_channel: str = "physics"
     # Gaussian prior standard deviations for detector-state parameters.
     prior_sd_z_offset: float = 0.5e-3      # global stack z-offset [m]
     prior_sd_compression: float = 0.25e-3  # uniform inter-disk gap error [m]

@@ -129,7 +129,7 @@ the Phase-2 engine is in.
   Phase 2 (misspecification-robust amortized inference) and Phase 4.1
   (drift on θ), not of the observation level.
 
-### 1.2 Physics-routed low-fidelity channel (reflectivity / group delay)  *(effort: L, deepest structural win)*
+### 1.2 Physics-routed low-fidelity channel (reflectivity / group delay)  *(effort: L, deepest structural win)* — ✅ implemented
 
 **Now:** the LF proxy is a scalar tied to J by a learned affine link —
 the weakest element of the current design. **Insight:** for dielectric
@@ -137,25 +137,43 @@ haloscopes, reflectivity and group-delay curves strongly constrain the
 disk geometry and losses; MADMAX's own proof-of-principle work infers
 boost behaviour from exactly these observables.
 
-**Change:**
+**Change (as implemented):**
 
-1. extend the 1D transfer-matrix simulator with a reflection-coefficient
-   solve `reflectivity(nu; u, theta)` (same matrix machinery, incoming
-   wave instead of the axion source term);
-2. model LF measurements as `y_LF = S_LF(u, theta) + r_LF + eps` — the
-   structure the Step-5 design note already specifies — so cheap RF
-   curves constrain θ *jointly* with HF data;
-3. update the mock hardware to return a reflectivity curve (with its
-   own noise/systematics) instead of the affine scalar;
-4. keep the affine link only as a fallback for proxies with no
-   simulator counterpart.
+1. the 1D transfer-matrix simulator gained a reflection-coefficient
+   solve (`_reflection_curves`: same machinery, no axion source, a unit
+   wave incident from the antenna side) exposing power reflectivity and
+   group delay; a `ReflectivitySummarizer` compresses them to
+   (mean reflectivity, reflectivity slope, group-delay centroid, mean
+   group delay);
+2. LF measurements enter Step 5 as a **second observation channel**
+   `y_LF = S_LF(u, theta) + r_LF + eps` with its own per-component
+   discrepancy GPs — cheap RF data constrain θ *jointly* with HF data;
+3. the mock hardware returns real reflectivity/group-delay curves with
+   their own systematics (amplitude mis-calibration, cable-delay
+   offset) plus per-bin noise;
+4. the affine link survives only as the `lf_channel = "affine"`
+   fallback; an identify-first Step-1 rule spends the first few ~0.1 h
+   reflectivity probes before any HF candidate.
 
-**Effect:** the information economy inverts — geometry calibration
-flows mainly through ~0.1 h RF measurements; ~1 h HF measurements are
-reserved for validating the objective scale and pinning the
-discrepancy. **Acceptance:** benchmark shows a large reduction in HF
-count at equal final quality, with the LF channel's discrepancy model
-preventing overconfident pooling.
+A physics-correctness fix rode along: the dielectric loss sign
+(`Im(n)`) was corrected so absorption is physical — caught by the new
+reflection-solver unitarity check (lossless ⇒ |Γ|²=1).
+
+**Acceptance (measured):**
+
+- *HF+LF vs HF-only on identical data (6 reflectivity probes on 10 HF
+  points):* the loss parameter goes from weakly constrained (sd ≈ 0.2,
+  wrong) to identified (0.30 ± 0.015), and correctable-geometry errors
+  drop to ~5–20 µm. Enforced by `tests/test_curve_summaries.py`.
+- *Full-loop benchmark (3 seeds, physics vs off):* θ_z error 166 → 55 µm
+  and θ_c error 181 → 48 µm — roughly 3× — with HF-to-converge 11.0 →
+  8.7, all runs significant, 100% safety/budget, and identifiability
+  flags going from `weak` to `ok`. The example run reaches 21σ in 8 HF
+  measurements (vs 12–15 before), the information budget having moved to
+  the cheap channel exactly as intended.
+- *Stability:* Phase-1.2 validation exposed a spurious MAP mode (loss
+  driven to its prior bound with few LF points); fixed with multi-start
+  MAP rounds and a 4-prior-sd cap on the discrepancy amplitude refit.
 
 ### 1.3 Optional: self-commanded perturbation measurements  *(effort: M, stretch)*
 

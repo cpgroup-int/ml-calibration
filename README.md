@@ -103,12 +103,19 @@ sphinx-build -b html docs docs/_build/html
 
 ## Roadmap
 
-Planned conceptual upgrades — curve-level inference, a physics-routed
-reflectivity channel, amortized simulation-based inference for the
-detector state, a value-of-information decision layer, and transfer of
-calibration knowledge across the ~12 frequency windows of the 18–24 GHz
-campaign — are prioritized and sequenced in
-[`docs/ROADMAP.md`](docs/ROADMAP.md).
+Conceptual upgrades are prioritized, sequenced, and tracked with measured
+acceptance results in [`docs/ROADMAP.md`](docs/ROADMAP.md). **Implemented
+so far:** the settings-driven configuration and A/B benchmark harness
+(Phase 0); the curve-summary likelihood in Step 5 (Phase 1.1); and the
+physics-routed reflectivity/group-delay low-fidelity channel that
+calibrates the detector state from cheap RF data (Phase 1.2). **Planned
+next:** amortized simulation-based inference for the detector state, a
+value-of-information decision layer, and transfer of calibration
+knowledge across the frequency windows of the 18–24 GHz campaign.
+
+The original design documents under `docs/design/` each carry an
+**implementation-status appendix** recording how the locked design was
+realized and what deviates.
 
 ## Safety model
 

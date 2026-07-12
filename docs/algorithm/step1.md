@@ -26,6 +26,10 @@ propose(model, dataset, trust_region, budget, current, now)
 │     + physics-informed exploit candidate: Nelder-Mead maximization of
 │       the plug-in predictive mean, merged into the pool
 │
+├─ 3b. Identify first (Phase 1.2): physics LF channel active and fewer
+│      than min_lf_identification reflectivity measurements?
+│        └─► LF_PROBE at the most informative feasible candidate
+│
 ├─ 4. Acquisition:  A(u) = [EI(u) + λ_info · σ_lat(u)] · P_soft(u) / C(u, HF)
 │       with a hard veto for P_soft < threshold
 │
@@ -73,9 +77,18 @@ Two gates keep the optimizer from chasing noise (design §16–17):
   window exceeds twice the measurement noise.
 
 When the EI gate fails, the budget decides between *cheap information*
-(LF probe at the most uncertain feasible candidate — also how the LF↔HF
-link gets its calibration data), *replication* (incumbent posterior sd too
+(LF probe at the most uncertain feasible candidate — always informative
+with the physics LF channel, since reflectivity data constrain θ
+directly; with the affine fallback only while the link is validated or
+still needs calibration data), *replication* (incumbent posterior sd too
 large), or a *stop recommendation* that Step 7 will act on.
+
+Before any of that, the **identify-first rule** (a minimal precursor of
+the Phase-3.4 design) spends up to `min_lf_identification` ~0.1 h
+reflectivity probes at the start of a run: they pin the detector state —
+including the loss parameter that boost curves cannot separate from
+geometry — before the first expensive HF candidate is chosen. These
+probes are excluded from the Step-7 patience counter.
 
 ## Trust region
 
