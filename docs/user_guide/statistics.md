@@ -167,6 +167,68 @@ the proposed *correction* is unaffected, but the *physical
 interpretation* of individual components must not be over-trusted. This is
 exactly the Kennedy–O'Hagan confounding the design notes cite.
 
+## Amortized inference engine (NPE)
+
+`Step5Config.inference_engine = "amortized_npe"` (roadmap Phase 2)
+replaces the joint-MAP estimate of $\theta$ with an **amortized neural
+posterior estimator** — a conditional density $q(\theta \mid c)$ trained
+offline against the simulator and evaluated online in a millisecond
+forward pass. The Laplace approximation's weakness is exactly the
+degeneracy valley above: a Gaussian centred at one MAP point is
+**overconfident** and cannot represent the skewed/curved ridge. NPE
+learns a flexible (Gaussian-mixture) posterior instead.
+
+The engine ({mod}`madmax_calibration.amortized`):
+
+- **Network.** A small mixture-density network (two tanh layers →
+  diagonal Gaussian mixture over standardized $\theta$), implemented in
+  pure numpy so the online runtime stays numpy/scipy-only. Trained
+  weights are exported to a plain `.npz` blob — no PyTorch at inference.
+- **Conditioning.** $\theta$ is global while measurements arrive at
+  arbitrary $u_i$, so the network conditions on a fixed-length,
+  permutation-invariant summary: each measurement's residual against the
+  *nominal* simulation projected onto its design $[1, x_i]$, averaged
+  over measurements (a Gauss-Newton sufficient direction). This handles
+  any number of HF and LF measurements and appends cleanly to window
+  features for the planned cross-window transfer (Phase 5).
+- **Misspecification robustness.** Training injects a shared systematic
+  bias into each episode's summaries (a stand-in for the tilt / focus /
+  calibration systematics), so the amortized posterior is trained to be
+  *appropriately wide* under the model error it will meet online — the
+  robustness the roadmap requires.
+- **Hybrid, not a replacement of the physics.** The forward model and
+  the **online discrepancy GPs are kept**: NPE produces $p(\theta \mid
+  D)$; the drift and noise-inflation terms are then fit with $\theta$
+  fixed, and the per-channel discrepancy GPs are conditioned at the NPE
+  estimate exactly as in the joint-MAP path.
+  {meth}`~madmax_calibration.steps.step5_inference.Step5Result.theta_samples`
+  becomes **exact mixture sampling** instead of a Laplace Gaussian draw,
+  and Step 6 is unchanged.
+
+**Validation (SBC).** Correctness is checked by simulation-based
+calibration ({mod}`madmax_calibration.sbc`): for data simulated from
+$\theta^\star \sim$ prior, a calibrated posterior makes the rank of
+$\theta^\star$ among posterior samples uniform. On the shipped weights
+the well-specified case passes (rank KS $p > 0.3$, 2σ coverage
+0.93–0.95), and coverage degrades gracefully to ~0.9 under injected
+discrepancy. This SBC replaces the Laplace-specific residual checks as
+the acceptance instrument for the amortized engine.
+
+**Measured trade-off.** On the full-loop benchmark (3 seeds) NPE gives
+equal-or-better validated improvement at equal HF count and 100%
+safety/budget, ~3× faster inference, and honestly calibrated (often
+wider) posteriors — versus the joint-MAP's tighter but overconfident
+estimates on the ridge.
+
+**Why it is opt-in, not the default.** The trained weights are specific
+to the control basis *and the frequency window* (the summaries depend on
+the window's grid). The shipped `weights/npe_prototype.npz` is trained
+for window 1 of the prototype settings; a different window or control
+basis needs a retrain (`python examples/train_npe.py`). A dimension
+guard falls the engine back to joint-MAP with a diagnostic if the
+weights do not match the current basis. Window-conditioned amortization
+that serves all windows from one network is roadmap Phase 5.
+
 ## The LF proxy link
 
 Lower-fidelity records never enter the joint fit as objective values.

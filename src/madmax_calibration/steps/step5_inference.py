@@ -63,6 +63,34 @@ from ..summaries import (
 )
 
 
+_POSTERIOR_CACHE: dict = {}
+
+
+def _default_weights_path() -> str:
+    from pathlib import Path
+
+    return str(Path(__file__).resolve().parents[3] / "weights" / "npe_prototype.npz")
+
+
+def _load_amortized_posterior(path: str | None):
+    """Load (and cache) a trained :class:`AmortizedPosterior`, or None."""
+    from pathlib import Path
+
+    resolved = path or _default_weights_path()
+    if resolved in _POSTERIOR_CACHE:
+        return _POSTERIOR_CACHE[resolved]
+    post = None
+    if Path(resolved).exists():
+        try:
+            from ..amortized import AmortizedPosterior
+
+            post = AmortizedPosterior.load(resolved)
+        except Exception:
+            post = None
+    _POSTERIOR_CACHE[resolved] = post
+    return post
+
+
 @dataclass
 class LFLinkModel:
     """Learned affine relation between a scalar LF proxy and the HF objective.
@@ -126,8 +154,14 @@ class Step5Result:
     lf_link: LFLinkModel = field(default_factory=LFLinkModel)
     diagnostics: dict = field(default_factory=dict)
     step6_ready: bool = True
+    inference_engine: str = "joint_map"
+    # Exact posterior sampler (set by the amortized-NPE engine); when
+    # present, theta_samples draws from it instead of the Laplace Gaussian.
+    sampler: object = field(default=None, repr=False)
 
     def theta_samples(self, n: int, rng: np.random.Generator) -> list[DetectorState]:
+        if self.sampler is not None:
+            return self.sampler(n, rng)
         chol = np.linalg.cholesky(self.theta_cov + 1e-18 * np.eye(3))
         mu = self.theta_map.to_vector()
         return [DetectorState.from_vector(mu + chol @ rng.standard_normal(3)) for _ in range(n)]
@@ -317,31 +351,10 @@ def run_step5(
 
     bounds = [(-5, 5)] * 3 + [(-5, 5), (-4, 2)]
 
-    # Alternate: (a) MAP over (theta, drift, noise) given GP hypers,
-    # (b) penalized ML-II refit of each component's GP hypers on its
-    # residuals.  Two rounds suffice with the warm start.  Every MAP
-    # round is multi-started (current point + prior mean): the joint
-    # landscape can grow a spurious runaway mode at the edge of the loss
-    # prior — observed directly in Phase-1.2 validation — and the
-    # alternation can co-adapt into it if a round is started only from
-    # the previous round's solution.
-    prior_mean_start = np.array([0.0, 0.0, 0.0, 0.0, -1.0])
-    res = None
-    for _ in range(2):
-        starts = [p0]
-        if float(np.max(np.abs(p0 - prior_mean_start))) > 1e-9:
-            starts.append(prior_mean_start)
-        best = None
-        for start in starts:
-            cand = minimize(
-                neg_log_post, start, args=(gp_hypers,), method="L-BFGS-B",
-                bounds=bounds, options={"maxiter": 60},
-            )
-            if best is None or cand.fun < best.fun:
-                best = cand
-        res = best
-        p0 = res.x
-        theta_std, drift, s = unpack(p0)
+    def refit_hypers(theta_std, drift, s, gp_hypers):
+        """Penalized ML-II refit of each component's GP hypers on its
+        residuals (amplitude capped at 4 prior sds: weak Occam factor at
+        small n cannot otherwise rule out runaway discrepancies)."""
         theta = DetectorState.from_vector(theta_std * prior_sd)
         new_hypers = {}
         seed_offset = 0
@@ -350,9 +363,6 @@ def run_step5(
             for k, nm in enumerate(ch.names):
                 resid = residuals(ch, pred, k, drift)
                 noise = np.sqrt(ch.sigma[:, k] ** 2 + (s * meas_scale[nm]) ** 2)
-                # Amplitude ceiling at 4 prior sds: with very few points the
-                # marginal likelihood alone cannot rule out runaway
-                # discrepancy explanations (weak Occam factor at small n).
                 gp_fitted = fit_gp_hyperparameters(
                     ch.x, resid, noise,
                     amplitude_bounds=(1e-4 * response_scale[nm], 4 * amp_prior[nm]),
@@ -362,40 +372,132 @@ def run_step5(
                 )
                 new_hypers[nm] = (gp_fitted.amplitude, float(gp_fitted.lengthscales[0]))
                 seed_offset += 1
-        gp_hypers = new_hypers
+        return new_hypers
 
-    theta_std, drift, s = unpack(res.x)
+    sampler = None
+    identifiability = {name: "ok" for name in DetectorState.NAMES}
+
+    # Engine selection: amortized NPE needs curve-summary HF data and a
+    # loadable weights file whose conditioning dimension matches the
+    # current control basis (the network is basis/window-specific — stale
+    # weights safely fall back to joint MAP).
+    posterior = None
+    if cfg5.inference_engine == "amortized_npe" and level == "curve_summary":
+        candidate = _load_amortized_posterior(cfg5.npe_weights_path)
+        if candidate is not None and candidate.featurizer.control_dim == control_map.dim:
+            posterior = candidate
+    engine = "amortized_npe" if posterior is not None else "joint_map"
+
+    if engine == "amortized_npe":
+        # Amortized posterior for theta from the residual-projection
+        # conditioning of the current dataset (roadmap Phase 2.1).
+        from ..amortized import build_conditioning
+
+        refl_summ = ReflectivitySummarizer(simulator.freqs)
+        lf_u_arr = np.stack([r.u_B_achieved for r in lf_phys_recs]) if lf_phys_recs else np.zeros((0, u_hf.shape[1]))
+        lf_z_arr = np.stack([r.summaries for r in lf_phys_recs]) if lf_phys_recs else np.zeros((0, len(REFLECTIVITY_SUMMARY_NAMES)))
+        c = build_conditioning(
+            posterior.featurizer, u_hf, z_hf, lf_u_arr, lf_z_arr,
+            control_map, simulator, objective, summarizer, refl_summ,
+        )
+        theta_mean_phys, theta_cov, sampler = posterior.infer(c, rng)
+        theta_std = theta_mean_phys.to_vector() / prior_sd
+        # Focused fit of (drift, log noise-inflation) with theta fixed,
+        # alternating with a hyper refit (theta stays at the NPE estimate).
+        dn = np.array([0.0, -1.0])
+        for _ in range(2):
+            def nlp_dn(q):
+                return neg_log_post(np.concatenate([theta_std, q]), gp_hypers)
+            r_dn = minimize(nlp_dn, dn, method="L-BFGS-B",
+                            bounds=[(-5, 5), (-4, 2)], options={"maxiter": 40})
+            dn = r_dn.x
+            _, drift, s = unpack(np.concatenate([theta_std, dn]))
+            gp_hypers = refit_hypers(theta_std, drift, s, gp_hypers)
+        _, drift, s = unpack(np.concatenate([theta_std, dn]))
+        # Crude drift sd from the 1-D curvature of the drift objective.
+        hd = 0.25
+        base = np.concatenate([theta_std, dn])
+        f0 = neg_log_post(base, gp_hypers)
+        fp = neg_log_post(base + np.array([0, 0, 0, hd, 0]), gp_hypers)
+        fm = neg_log_post(base + np.array([0, 0, 0, -hd, 0]), gp_hypers)
+        curv = max((fp - 2 * f0 + fm) / hd**2, 1.0)
+        drift_sd = float(np.sqrt(1.0 / curv) * cfg5.drift_rate_prior)
+        # Identifiability from the amortized marginal posterior width.
+        theta_sd = np.sqrt(np.diag(theta_cov))
+        for i, name in enumerate(DetectorState.NAMES):
+            if theta_sd[i] > 0.6 * prior_sd[i]:
+                identifiability[name] = "weak"
+    else:
+        # Alternate: (a) multi-start MAP over (theta, drift, noise) given
+        # GP hypers, (b) refit hypers on residuals.  Two rounds suffice
+        # with the warm start.  Multi-starting every round (current point
+        # + prior mean) guards the spurious loss-runaway mode seen in
+        # Phase-1.2 validation.
+        prior_mean_start = np.array([0.0, 0.0, 0.0, 0.0, -1.0])
+        res = None
+        for _ in range(2):
+            starts = [p0]
+            if float(np.max(np.abs(p0 - prior_mean_start))) > 1e-9:
+                starts.append(prior_mean_start)
+            best = None
+            for start in starts:
+                cand = minimize(
+                    neg_log_post, start, args=(gp_hypers,), method="L-BFGS-B",
+                    bounds=bounds, options={"maxiter": 60},
+                )
+                if best is None or cand.fun < best.fun:
+                    best = cand
+            res = best
+            p0 = res.x
+            theta_std, drift, s = unpack(p0)
+            gp_hypers = refit_hypers(theta_std, drift, s, gp_hypers)
+
+        theta_std, drift, s = unpack(res.x)
+
+        # Laplace covariance for (theta, drift) by finite-difference Hessian.
+        def nlp_sub(q: np.ndarray) -> float:
+            p = res.x.copy()
+            p[:4] = q
+            return neg_log_post(p, gp_hypers)
+
+        h = 1e-3
+        q0 = res.x[:4].copy()
+        hess = np.zeros((4, 4))
+        for i in range(4):
+            for k in range(i, 4):
+                ei = np.zeros(4)
+                ek = np.zeros(4)
+                ei[i] = h
+                ek[k] = h
+                fpp = nlp_sub(q0 + ei + ek)
+                fpm = nlp_sub(q0 + ei - ek)
+                fmp = nlp_sub(q0 - ei + ek)
+                fmm = nlp_sub(q0 - ei - ek)
+                hess[i, k] = hess[k, i] = (fpp - fpm - fmp + fmm) / (4 * h * h)
+        hess = 0.5 * (hess + hess.T)
+        eigval, eigvec = np.linalg.eigh(hess)
+        eigval = np.clip(eigval, 1.0, None)  # prior curvature floor
+        cov_std = eigvec @ np.diag(1.0 / eigval) @ eigvec.T
+        scale = np.concatenate([prior_sd, [cfg5.drift_rate_prior]])
+        cov_full = cov_std * np.outer(scale, scale)
+        theta_cov = cov_full[:3, :3]
+        drift_sd = float(np.sqrt(cov_full[3, 3]))
+
+        # Prior-sensitivity identifiability check (design §15.2).
+        if cfg5.prior_sensitivity_check:
+            wide_hypers = {nm: (3.0 * amp, ls) for nm, (amp, ls) in gp_hypers.items()}
+            res_wide = minimize(
+                neg_log_post, res.x, args=(wide_hypers,), method="L-BFGS-B",
+                bounds=bounds, options={"maxiter": 40},
+            )
+            theta_sd = np.sqrt(np.diag(theta_cov))
+            shift = np.abs(res_wide.x[:3] - res.x[:3]) * prior_sd
+            for i, name in enumerate(DetectorState.NAMES):
+                if shift[i] > 1.0 * max(theta_sd[i], 1e-12):
+                    identifiability[name] = "weak"
+
     theta_map = DetectorState.from_vector(theta_std * prior_sd)
     s_extra_j = float(s * meas_scale["J"])   # absolute, J units
-
-    # Laplace covariance for (theta, drift) by finite-difference Hessian.
-    def nlp_sub(q: np.ndarray) -> float:
-        p = res.x.copy()
-        p[:4] = q
-        return neg_log_post(p, gp_hypers)
-
-    h = 1e-3
-    q0 = res.x[:4].copy()
-    hess = np.zeros((4, 4))
-    for i in range(4):
-        for k in range(i, 4):
-            ei = np.zeros(4)
-            ek = np.zeros(4)
-            ei[i] = h
-            ek[k] = h
-            fpp = nlp_sub(q0 + ei + ek)
-            fpm = nlp_sub(q0 + ei - ek)
-            fmp = nlp_sub(q0 - ei + ek)
-            fmm = nlp_sub(q0 - ei - ek)
-            hess[i, k] = hess[k, i] = (fpp - fpm - fmp + fmm) / (4 * h * h)
-    hess = 0.5 * (hess + hess.T)
-    eigval, eigvec = np.linalg.eigh(hess)
-    eigval = np.clip(eigval, 1.0, None)  # prior curvature floor
-    cov_std = eigvec @ np.diag(1.0 / eigval) @ eigvec.T
-    scale = np.concatenate([prior_sd, [cfg5.drift_rate_prior]])
-    cov_full = cov_std * np.outer(scale, scale)
-    theta_cov = cov_full[:3, :3]
-    drift_sd = float(np.sqrt(cov_full[3, 3]))
 
     # Final per-component discrepancy GPs conditioned at the MAP.
     summary_gps: dict[str, GaussianProcess] = {}
@@ -420,20 +522,7 @@ def run_step5(
         name: ("correctable" if DetectorState.CORRECTABLE[name] else "diagnostic")
         for name in DetectorState.NAMES
     }
-
-    # ---- identifiability: prior-sensitivity check (section 15.2) --------
-    identifiability = {name: "ok" for name in DetectorState.NAMES}
-    if cfg5.prior_sensitivity_check:
-        wide_hypers = {nm: (3.0 * amp, ls) for nm, (amp, ls) in gp_hypers.items()}
-        res_wide = minimize(
-            neg_log_post, res.x, args=(wide_hypers,), method="L-BFGS-B",
-            bounds=bounds, options={"maxiter": 40},
-        )
-        theta_sd = np.sqrt(np.diag(theta_cov))
-        shift = np.abs(res_wide.x[:3] - res.x[:3]) * prior_sd
-        for i, name in enumerate(DetectorState.NAMES):
-            if shift[i] > 1.0 * max(theta_sd[i], 1e-12):
-                identifiability[name] = "weak"
+    # ``identifiability`` was set by the estimator branch above.
 
     # ---- LF link model: affine fallback only (section 12) ----------------
     lf_channel = "physics" if lf_phys_recs else "none"
@@ -500,12 +589,17 @@ def run_step5(
         "noise_inflation_factor": float(s),
         "drift_rate": float(drift),
         "baseline_drift_estimate": baseline_drift,
-        "converged": bool(res.success),
+        "engine": engine,
     }
     if want_summaries and level == "scalar":
         diagnostics["warning"] = (
             "curve_summary level requested but some HF records lack summaries; "
             "fell back to scalar-level inference"
+        )
+    if cfg5.inference_engine == "amortized_npe" and engine != "amortized_npe":
+        diagnostics["warning"] = (
+            "amortized_npe requested but unavailable (missing weights or "
+            "non-curve-summary level); fell back to joint_map"
         )
 
     return Step5Result(
@@ -528,4 +622,6 @@ def run_step5(
         lf_link=lf_link,
         diagnostics=diagnostics,
         step6_ready=True,
+        inference_engine=engine,
+        sampler=sampler,
     )

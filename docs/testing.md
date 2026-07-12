@@ -96,6 +96,23 @@ the suite stays fast while exercising identical code paths.
 | §7 latent vs observation | `…::test_observation_sd_exceeds_latent_sd` |
 | §17 extrapolation flags | `…::test_extrapolation_flagged` |
 
+## Amortized NPE engine (roadmap Phase 2)
+
+`tests/test_amortized.py`:
+
+| Requirement | Test |
+|---|---|
+| MDN backprop matches numerical gradient | `test_mdn_gradient_matches_numerical` |
+| network learns a conditional mean | `test_mdn_learns_conditional_mean` |
+| sampling matches mixture mean/cov | `test_mdn_sampling_matches_mean_cov` |
+| conditioning is permutation-invariant, right dim | `test_featurizer_dimension_and_permutation_invariance` |
+| weights save/load round-trip | `test_posterior_save_load_round_trip` |
+| training recovers the detector state | `test_training_recovers_theta_direction` |
+| Step 5 uses NPE with shipped weights (+ exact sampling) | `test_step5_uses_npe_engine_with_shipped_weights` |
+| missing/mismatched weights → joint_map fallback | `test_step5_falls_back_when_weights_missing` |
+| **SBC: well-specified posterior is calibrated** | `test_sbc_well_specified_is_calibrated` |
+| SBC degrades gracefully under misspecification | `test_sbc_degrades_gracefully_under_misspecification` |
+
 ## End-to-end (integration)
 
 `tests/test_loop_end_to_end.py` runs the complete loop against the

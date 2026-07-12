@@ -19,6 +19,8 @@ Core modules
    constraints
    hardware
    loop
+   amortized
+   sbc
 
 Step modules
 ------------

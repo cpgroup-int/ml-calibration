@@ -108,10 +108,15 @@ identifiability warnings.  The default observation level is
 **curve-summary** (design §4.2, roadmap Phase 1.1): each HF measurement
 contributes (J, log peak, band centroid, bandwidth, flatness) with one
 discrepancy GP per component; `observation_level = "scalar"` retains the
-J-only special case for A/B benchmarking.  Level B/C (partial/full
-posterior sampling) are future work; the `Step5Result` interface
-(posterior samples via `theta_samples`) already matches what they would
-provide.
+J-only special case for A/B benchmarking.  An **amortized neural
+posterior estimator** is available as an opt-in engine
+(`inference_engine = "amortized_npe"`, roadmap Phase 2): calibrated
+(SBC-validated), ~3x faster, hybrid with the online discrepancy GPs, and
+exported to plain numpy weights.  It is opt-in because the weights are
+basis/window-specific (window-conditioned amortization is Phase 5).
+Per-iteration MCMC (Levels B/C) is not implemented — amortization
+provides the flexible posterior instead; the `Step5Result.theta_samples`
+interface already matched what they would provide.
 
 ## 12. Step-6 antenna convention
 
@@ -134,7 +139,9 @@ basis changes.
 - Multi-objective / Pareto-front calibration (Step 1 §18, Step 6 §10).
 - Full curve-level Step-5 inference (§4.3) — the curve-summary level
   (§4.2) is implemented and default; the per-bin curve likelihood is not.
-- Full Bayesian sampling (MCMC/HMC) for Step 5 (Level C).
+- Per-iteration MCMC/HMC (Levels B/C) for Step 5 — the amortized NPE
+  engine (roadmap Phase 2, opt-in) provides the flexible calibrated
+  posterior instead.
 - Knowledge-gradient / entropy-based information terms (the information
   value is the posterior-sd proxy of Step 1 §11).
 - Achieved-geometry *distribution* in Step-6 predictions (§6): predictions

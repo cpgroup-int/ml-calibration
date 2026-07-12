@@ -1370,9 +1370,34 @@ The failure modes of §17 appeared concretely and are guarded:
 
 - Curve-**level** (per-bin) inference (§4.3) and richer multi-fidelity
   covariance are not implemented; the summary level is the interface.
-- Full Bayesian sampling (Levels B/C, §13.2–13.3) is future work; the
-  `Step5Result.theta_samples` interface already matches what they would
-  provide (used by Step 6), and is the natural seam for the planned
-  amortized simulation-based inference (roadmap Phase 2).
 - Cross-summary measurement correlations are neglected (documented
   Level-A approximation).
+
+## A.6 Amortized inference engine (roadmap Phase 2)
+
+Beyond the joint-MAP + Laplace of §A.1, an **amortized neural posterior
+estimator** is available as a selectable engine
+(`Step5Config.inference_engine = "amortized_npe"`; module
+`madmax_calibration.amortized`).  It addresses the Laplace failure mode
+this note anticipates (§17.1: overconfident Gaussian uncertainty on the
+θ-discrepancy degeneracy) by learning a flexible mixture posterior
+offline against the simulator and evaluating it online in ~0.1 ms.
+
+- **Hybrid, not a replacement of the physics.** NPE produces
+  p(θ | data); the drift/noise terms and the per-channel discrepancy GPs
+  are still fit online at the NPE estimate — the discrepancy channel of
+  §9 is preserved, and `theta_samples` becomes exact mixture sampling
+  (Levels B/C, §13.2–13.3, in spirit, via amortization rather than
+  per-iteration MCMC).
+- **Misspecification robustness** (§15): training injects a shared
+  systematic bias so the posterior is trained appropriately wide under
+  the model error it meets online.
+- **Validation** replaces the Laplace-specific residual checks with
+  simulation-based calibration (rank uniformity + coverage, with and
+  without injected discrepancy; module `madmax_calibration.sbc`),
+  matching this note's insistence (§20) on synthetic-recovery and
+  confounding tests.
+- **Kept opt-in** (default `joint_map`) because the trained weights are
+  basis- and window-specific; a dimension guard falls back to joint MAP
+  on mismatch.  One network serving all windows is the cross-window
+  transfer of roadmap Phase 5.
