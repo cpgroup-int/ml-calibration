@@ -2,13 +2,12 @@
 
 ## Requirements
 
-- Python ≥ 3.10
+- Python ≥ 3.11
 - `numpy` ≥ 1.24, `scipy` ≥ 1.10 (installed automatically)
+- `torch` ≥ 2.1 and `zuko` ≥ 1.1 for the amortized NPE engine
+  (installed automatically; a CPU-only torch build is sufficient:
+  `pip install torch --index-url https://download.pytorch.org/whl/cpu`)
 - `pytest` for the validation suite
-
-The package is deliberately dependency-light: the Gaussian processes, the
-acquisition logic and the physics simulator are self-contained, so no
-BoTorch/PyTorch stack is required.
 
 ## Installation
 
@@ -84,11 +83,11 @@ repository settings file when present.)
 
 To use the amortized neural-posterior inference engine (roadmap Phase 2 —
 calibrated, ~3× faster), set `inference_engine = "amortized_npe"` in the
-settings file (the shipped `weights/npe_prototype.npz` covers window 1 of
+settings file (the shipped `weights/npe_prototype.pt` covers window 1 of
 the prototype). Retrain for another window or control basis with:
 
 ```bash
-python examples/train_npe.py --window window_07 --out weights/npe_window07.npz
+python examples/train_npe.py --window window_07 --out weights/npe_window07.pt
 ```
 
 Assembling the pieces explicitly — which is what you will do when

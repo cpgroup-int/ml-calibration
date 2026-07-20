@@ -1380,13 +1380,14 @@ estimator** is available as a selectable engine
 (`Step5Config.inference_engine = "amortized_npe"`; module
 `madmax_calibration.amortized`).  It addresses the Laplace failure mode
 this note anticipates (§17.1: overconfident Gaussian uncertainty on the
-θ-discrepancy degeneracy) by learning a flexible mixture posterior
-offline against the simulator and evaluating it online in ~0.1 ms.
+θ-discrepancy degeneracy) by learning a flexible posterior — a
+conditional neural spline flow on the standard SBI stack (PyTorch +
+zuko) — offline against the simulator, evaluated online in milliseconds.
 
 - **Hybrid, not a replacement of the physics.** NPE produces
   p(θ | data); the drift/noise terms and the per-channel discrepancy GPs
   are still fit online at the NPE estimate — the discrepancy channel of
-  §9 is preserved, and `theta_samples` becomes exact mixture sampling
+  §9 is preserved, and `theta_samples` becomes exact flow sampling
   (Levels B/C, §13.2–13.3, in spirit, via amortization rather than
   per-iteration MCMC).
 - **Misspecification robustness** (§15): training injects a shared

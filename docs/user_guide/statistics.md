@@ -176,14 +176,15 @@ offline against the simulator and evaluated online in a millisecond
 forward pass. The Laplace approximation's weakness is exactly the
 degeneracy valley above: a Gaussian centred at one MAP point is
 **overconfident** and cannot represent the skewed/curved ridge. NPE
-learns a flexible (Gaussian-mixture) posterior instead.
+learns a flexible (normalizing-flow) posterior instead.
 
 The engine ({mod}`madmax_calibration.amortized`):
 
-- **Network.** A small mixture-density network (two tanh layers →
-  diagonal Gaussian mixture over standardized $\theta$), implemented in
-  pure numpy so the online runtime stays numpy/scipy-only. Trained
-  weights are exported to a plain `.npz` blob — no PyTorch at inference.
+- **Network.** A conditional **neural spline flow** over standardized
+  $\theta$, built on the established SBI stack: PyTorch for the network
+  and training loop, [zuko](https://zuko.readthedocs.io) for the
+  masked-autoregressive rational-quadratic spline flow. Trained weights
+  ship as a standard `.pt` checkpoint.
 - **Conditioning.** $\theta$ is global while measurements arrive at
   arbitrary $u_i$, so the network conditions on a fixed-length,
   permutation-invariant summary: each measurement's residual against the
@@ -202,27 +203,36 @@ The engine ({mod}`madmax_calibration.amortized`):
   fixed, and the per-channel discrepancy GPs are conditioned at the NPE
   estimate exactly as in the joint-MAP path.
   {meth}`~madmax_calibration.steps.step5_inference.Step5Result.theta_samples`
-  becomes **exact mixture sampling** instead of a Laplace Gaussian draw,
+  becomes **exact flow sampling** instead of a Laplace Gaussian draw,
   and Step 6 is unchanged.
 
 **Validation (SBC).** Correctness is checked by simulation-based
 calibration ({mod}`madmax_calibration.sbc`): for data simulated from
 $\theta^\star \sim$ prior, a calibrated posterior makes the rank of
 $\theta^\star$ among posterior samples uniform. On the shipped weights
-the well-specified case passes (rank KS $p > 0.3$, 2σ coverage
-0.93–0.95), and coverage degrades gracefully to ~0.9 under injected
-discrepancy. This SBC replaces the Laplace-specific residual checks as
-the acceptance instrument for the amortized engine.
+the well-specified case passes (rank KS $p = 0.70$–$0.93$, 2σ coverage
+0.94–0.964), and coverage stays ≈0.95 under injected discrepancy
+(0.945–0.96). SBC is what disciplines the training recipe: a flow
+trained to a fixed epoch budget reaches a much lower NLL but fails SBC
+(overconfident), so training uses validation-based early stopping — the
+standard NPE recipe. This SBC replaces the Laplace-specific residual
+checks as the acceptance instrument for the amortized engine.
 
 **Measured trade-off.** On the full-loop benchmark (3 seeds) NPE gives
-equal-or-better validated improvement at equal HF count and 100%
-safety/budget, ~3× faster inference, and honestly calibrated (often
-wider) posteriors — versus the joint-MAP's tighter but overconfident
-estimates on the ridge.
+equal validated improvement (0.074 ± 0.005 → 0.072 ± 0.002, all seeds
+significant) at 100% safety/budget, faster inference, and honestly
+calibrated posteriors (2σ coverage 0.96 → 1.00) — versus the
+joint-MAP's tighter but overconfident estimates on the ridge. The
+honesty has a price: the wider posterior keeps the stopping rule from
+firing as early, so the loop spends more HF measurements (8.7 → 14.3
+mean on this benchmark) and its point estimate of $\theta$ is noisier
+than the physics-structured joint MAP. Where HF budget is the binding
+constraint, `joint_map` remains the right default; the NPE engine buys
+calibrated uncertainty.
 
 **Why it is opt-in, not the default.** The trained weights are specific
 to the control basis *and the frequency window* (the summaries depend on
-the window's grid). The shipped `weights/npe_prototype.npz` is trained
+the window's grid). The shipped `weights/npe_prototype.pt` is trained
 for window 1 of the prototype settings; a different window or control
 basis needs a retrain (`python examples/train_npe.py`). A dimension
 guard falls the engine back to joint-MAP with a diagnostic if the

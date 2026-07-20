@@ -180,7 +180,7 @@ optional* — they are what separates $\theta$ from discrepancy).
 | Field | Default | Meaning |
 |---|---|---|
 | `inference_engine` | `"joint_map"` | Detector-state engine (roadmap Phase 2): `"joint_map"` (joint MAP + Laplace) or `"amortized_npe"` (amortized neural posterior; calibrated, ~3× faster, hybrid with the online discrepancy GPs). NPE needs a matching weights file and curve-summary level, else it falls back to joint_map with a diagnostic. |
-| `npe_weights_path` | `None` | Path to the trained NPE weights; `None` uses `weights/npe_prototype.npz`. Weights are basis/window-specific — retrain with `examples/train_npe.py` when the config changes. |
+| `npe_weights_path` | `None` | Path to the trained NPE weights (`.pt` checkpoint); `None` uses `weights/npe_prototype.pt`. Weights are basis/window-specific — retrain with `examples/train_npe.py` when the config changes. |
 | `observation_level` | `"curve_summary"` | What each HF measurement contributes to the joint fit: the curve-summary vector (J, log peak, centroid, bandwidth, flatness — roadmap Phase 1.1) or, with `"scalar"`, only J (the pre-1.1 behaviour, kept for A/B benchmarking). |
 | `lf_channel` | `"physics"` | How LF reflectivity data enter the joint fit (roadmap Phase 1.2): `"physics"` routes the reflectivity/group-delay summaries through the simulator so they constrain θ jointly; `"affine"` keeps only the scalar-link fallback; `"off"` ignores LF data. |
 | `prior_sd_z_offset` ⚠ | 0.5 mm | Gaussian prior sd for the stack z-offset. |

@@ -3,8 +3,9 @@
 Used for the Step-5 scalar discrepancy model, the Step-3 antenna-alignment
 surrogate and the learned soft-constraint model.  Deliberately minimal:
 the design notes only require a GP with fixed/heteroscedastic observation
-noise and marginal-likelihood hyperparameter fitting; heavy BO frameworks
-are avoided so the package stays dependency-light.
+noise and marginal-likelihood hyperparameter fitting, which fits in a page
+of numpy/scipy.  The roadmap Phase-3 acquisition work is the natural point
+to move to a full BO framework (e.g. BoTorch) if these models outgrow it.
 """
 
 from __future__ import annotations

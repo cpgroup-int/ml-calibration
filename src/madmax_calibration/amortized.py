@@ -4,9 +4,11 @@ Roadmap Phase 2 replaces the joint-MAP + Laplace estimate of the
 detector state ``theta`` with an **amortized neural posterior estimator**
 (NPE): a conditional density ``q(theta | c)`` trained offline against the
 fast simulator, evaluated online in a millisecond forward pass.  The
-online runtime stays numpy/scipy-only — the network is a small mixture
-density network implemented here in pure numpy, and trained weights are
-exported to a plain ``.npz`` blob (no PyTorch at inference time).
+density model is a **conditional neural spline flow** built on the
+established SBI stack — PyTorch for the network and training loop,
+`zuko <https://zuko.readthedocs.io>`_ for the normalizing flow — rather
+than anything hand-rolled; trained weights are shipped as a standard
+``.pt`` checkpoint.
 
 Why NPE here.  With a cheap, tractable forward model the value of SBI is
 *not* to replace the simulator (we keep it) but to produce a
@@ -30,8 +32,8 @@ The trained posterior feeds Step 5 through
 :mod:`madmax_calibration.steps.step5_inference`; the discrepancy GPs are
 still fitted online (NPE handles theta, the discrepancy channel keeps
 absorbing what theta cannot explain), and
-``Step5Result.theta_samples`` becomes exact sampling from the amortized
-mixture instead of a Gaussian Laplace draw.
+``Step5Result.theta_samples`` becomes exact sampling from the flow
+instead of a Gaussian Laplace draw.
 """
 
 from __future__ import annotations
@@ -39,6 +41,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 import numpy as np
+import torch
+import zuko
 
 from .simulator import DetectorState
 from .summaries import (
@@ -47,12 +51,6 @@ from .summaries import (
     CurveSummarizer,
     ReflectivitySummarizer,
 )
-
-
-def _logsumexp(a: np.ndarray, axis=-1, keepdims=False):
-    amax = np.max(a, axis=axis, keepdims=True)
-    out = amax + np.log(np.sum(np.exp(a - amax), axis=axis, keepdims=True))
-    return out if keepdims else np.squeeze(out, axis=axis)
 
 
 # ---------------------------------------------------------------------------
@@ -120,174 +118,132 @@ class ResidualProjectionFeaturizer:
 
 
 # ---------------------------------------------------------------------------
-# Mixture density network (pure numpy)
+# Conditional normalizing flow (PyTorch + zuko)
 # ---------------------------------------------------------------------------
 
-@dataclass
-class MDNParams:
-    """Weights of the MLP + mixture-density head."""
+class ConditionalFlow(torch.nn.Module):
+    """Conditional posterior q(theta_std | c) as a neural spline flow.
 
-    W1: np.ndarray
-    b1: np.ndarray
-    W2: np.ndarray
-    b2: np.ndarray
-    W_out: np.ndarray
-    b_out: np.ndarray
-
-    def copy(self) -> "MDNParams":
-        return MDNParams(*(a.copy() for a in self.as_list()))
-
-    def as_list(self):
-        return [self.W1, self.b1, self.W2, self.b2, self.W_out, self.b_out]
-
-
-class MixtureDensityNetwork:
-    """Conditional Gaussian-mixture posterior q(theta_std | c).
-
-    Two tanh hidden layers into a diagonal-covariance mixture over the
-    standardized detector state.  Forward evaluation, exact sampling and
-    log-density are pure numpy; training (:meth:`fit`) uses hand-derived
-    gradients with Adam, needed only offline.
+    A thin wrapper around :class:`zuko.flows.NSF` (masked autoregressive
+    rational-quadratic spline flow) that adds context standardization,
+    a plain minibatch training loop (:meth:`fit`), and numpy-facing
+    moment/sampling helpers so the rest of the package never touches
+    torch tensors directly.
     """
 
-    def __init__(self, input_dim: int, theta_dim: int = 3, n_components: int = 4,
-                 hidden: int = 64, params: MDNParams | None = None, seed: int = 0):
-        self.input_dim = input_dim
+    #: Monte-Carlo sample count used for posterior moments.
+    N_MOMENT_SAMPLES = 4096
+
+    def __init__(self, context_dim: int, theta_dim: int = 3, *,
+                 transforms: int = 3, hidden: int = 96, bins: int = 8,
+                 seed: int = 0):
+        super().__init__()
+        self.context_dim = context_dim
         self.theta_dim = theta_dim
-        self.K = n_components
-        self.hidden = hidden
-        self.out_dim = n_components * (1 + 2 * theta_dim)
-        if params is None:
-            rng = np.random.default_rng(seed)
-            scale1 = np.sqrt(1.0 / input_dim)
-            scale2 = np.sqrt(1.0 / hidden)
-            params = MDNParams(
-                W1=rng.normal(0, scale1, (input_dim, hidden)),
-                b1=np.zeros(hidden),
-                W2=rng.normal(0, scale2, (hidden, hidden)),
-                b2=np.zeros(hidden),
-                W_out=rng.normal(0, 0.01, (hidden, self.out_dim)),
-                b_out=np.zeros(self.out_dim),
+        self.hparams = {"transforms": transforms, "hidden": hidden, "bins": bins}
+        with torch.random.fork_rng(devices=[]):
+            torch.manual_seed(seed)
+            self.flow = zuko.flows.NSF(
+                theta_dim, context=context_dim, transforms=transforms,
+                hidden_features=(hidden, hidden), bins=bins,
             )
-        self.p = params
+        # Context standardization, set from the training set in fit().
+        self.register_buffer("c_loc", torch.zeros(context_dim))
+        self.register_buffer("c_scale", torch.ones(context_dim))
 
-    # ---- forward -------------------------------------------------------
+    def _context(self, c: np.ndarray) -> torch.Tensor:
+        t = torch.as_tensor(np.asarray(c), dtype=torch.float32)
+        return (t - self.c_loc) / self.c_scale
 
-    def _forward_hidden(self, C: np.ndarray):
-        z1 = C @ self.p.W1 + self.p.b1
-        h1 = np.tanh(z1)
-        z2 = h1 @ self.p.W2 + self.p.b2
-        h2 = np.tanh(z2)
-        out = h2 @ self.p.W_out + self.p.b_out
-        return h1, h2, out
+    # ---- numpy-facing inference helpers --------------------------------
 
-    def _split(self, out: np.ndarray):
-        K, D = self.K, self.theta_dim
-        logits = out[..., :K]
-        means = out[..., K:K + K * D].reshape(*out.shape[:-1], K, D)
-        log_sd = out[..., K + K * D:].reshape(*out.shape[:-1], K, D)
-        log_sd = np.clip(log_sd, -6.0, 3.0)
-        return logits, means, log_sd
-
-    def distribution(self, C: np.ndarray):
-        """Return (log mixture weights, means, sds) for a batch of c."""
-        C = np.atleast_2d(C)
-        _, _, out = self._forward_hidden(C)
-        logits, means, log_sd = self._split(out)
-        log_w = logits - _logsumexp(logits, axis=-1, keepdims=True)
-        return log_w, means, np.exp(log_sd)
+    def sample_np(self, c: np.ndarray, n: int, seed: int) -> np.ndarray:
+        """Draw n posterior samples of theta_std for one conditioning c."""
+        with torch.random.fork_rng(devices=[]):
+            torch.manual_seed(seed)
+            with torch.no_grad():
+                s = self.flow(self._context(c)).sample((n,))
+        return s.double().numpy()
 
     def posterior_mean_cov(self, c: np.ndarray):
-        """Mean and covariance of q(theta_std | c) for a single c."""
-        log_w, means, sds = self.distribution(c)
-        w = np.exp(log_w)[0]                     # (K,)
-        m = means[0]                              # (K, D)
-        sd = sds[0]                               # (K, D)
-        mean = w @ m                              # (D,)
-        # Law of total covariance for a diagonal mixture.
-        cov = np.zeros((self.theta_dim, self.theta_dim))
-        for k in range(self.K):
-            diff = (m[k] - mean)[:, None]
-            cov += w[k] * (np.diag(sd[k] ** 2) + diff @ diff.T)
-        return mean, cov
+        """Monte-Carlo mean and covariance of q(theta_std | c).
 
-    def sample(self, c: np.ndarray, n: int, rng: np.random.Generator) -> np.ndarray:
-        log_w, means, sds = self.distribution(c)
-        w = np.exp(log_w)[0]
-        comps = rng.choice(self.K, size=n, p=w / w.sum())
-        eps = rng.standard_normal((n, self.theta_dim))
-        return means[0][comps] + sds[0][comps] * eps
+        Uses a fixed internal seed so repeated calls (and save/load
+        round trips) are exactly reproducible.
+        """
+        s = self.sample_np(c, self.N_MOMENT_SAMPLES, seed=0)
+        return s.mean(axis=0), np.cov(s.T)
 
     # ---- training ------------------------------------------------------
 
-    def _nll_and_grad(self, C: np.ndarray, Theta: np.ndarray):
-        """Mean NLL and parameter gradients over a minibatch."""
-        n = len(C)
-        K, D = self.K, self.theta_dim
-        h1, h2, out = self._forward_hidden(C)
-        logits, means, log_sd = self._split(out)
-        log_w = logits - _logsumexp(logits, axis=-1, keepdims=True)   # (n, K)
-        sd = np.exp(log_sd)
-        th = Theta[:, None, :]                                         # (n,1,D)
-        zscore = (th - means) / sd                                    # (n,K,D)
-        log_norm = -0.5 * np.sum(zscore ** 2 + 2 * log_sd + np.log(2 * np.pi), axis=-1)
-        log_joint = log_w + log_norm                                  # (n,K)
-        log_q = _logsumexp(log_joint, axis=-1)                        # (n,)
-        nll = -np.mean(log_q)
-
-        gamma = np.exp(log_joint - log_q[:, None])                    # responsibilities (n,K)
-        # Grad wrt head pre-activations.
-        d_logits = (np.exp(log_w) - gamma)                           # (n,K)
-        d_means = (-gamma[..., None]) * (zscore / sd)                # (n,K,D)
-        d_log_sd = (-gamma[..., None]) * (zscore ** 2 - 1.0)         # (n,K,D)
-        # respect the clip on log_sd (zero grad outside range)
-        d_log_sd = np.where((log_sd > -6.0) & (log_sd < 3.0), d_log_sd, 0.0)
-        d_out = np.concatenate(
-            [d_logits, d_means.reshape(n, K * D), d_log_sd.reshape(n, K * D)], axis=1
-        ) / n                                                         # (n, out_dim)
-
-        gW_out = h2.T @ d_out
-        gb_out = d_out.sum(0)
-        d_h2 = d_out @ self.p.W_out.T
-        d_z2 = d_h2 * (1 - h2 ** 2)
-        gW2 = h1.T @ d_z2
-        gb2 = d_z2.sum(0)
-        d_h1 = d_z2 @ self.p.W2.T
-        d_z1 = d_h1 * (1 - h1 ** 2)
-        gW1 = C.T @ d_z1
-        gb1 = d_z1.sum(0)
-        return nll, MDNParams(gW1, gb1, gW2, gb2, gW_out, gb_out)
-
-    def fit(self, C: np.ndarray, Theta: np.ndarray, *, epochs: int = 400,
-            batch_size: int = 256, lr: float = 3e-3, weight_decay: float = 1e-4,
+    def fit(self, C: np.ndarray, Theta: np.ndarray, *, epochs: int = 300,
+            batch_size: int = 256, lr: float = 1e-3, weight_decay: float = 1e-5,
+            val_fraction: float = 0.1, patience: int = 30,
             seed: int = 0, verbose: bool = False) -> list[float]:
-        rng = np.random.default_rng(seed)
-        n = len(C)
-        params = self.p.as_list()
-        m = [np.zeros_like(a) for a in params]
-        v = [np.zeros_like(a) for a in params]
-        b1, b2, eps = 0.9, 0.999, 1e-8
+        """Maximum-likelihood training; returns the per-epoch mean NLL.
+
+        Uses **validation-based early stopping** (the standard NPE recipe,
+        e.g. the ``sbi`` toolkit's default): a held-out fraction of the
+        episodes tracks generalization, training stops after ``patience``
+        epochs without improvement, and the best-validation weights are
+        restored.  Without this the flow overfits the training episodes
+        and the posterior becomes overconfident (SBC under-coverage).
+        """
+        import copy
+
+        self.c_loc = torch.as_tensor(C.mean(axis=0), dtype=torch.float32)
+        self.c_scale = torch.as_tensor(
+            np.maximum(C.std(axis=0), 1e-6), dtype=torch.float32
+        )
+        Ct = self._context(C)
+        Tt = torch.as_tensor(Theta, dtype=torch.float32)
+        opt = torch.optim.AdamW(self.flow.parameters(), lr=lr,
+                                weight_decay=weight_decay)
+        sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=epochs)
+        gen = torch.Generator().manual_seed(seed)
+        n = len(Ct)
+        n_val = int(round(n * val_fraction))
+        split = torch.randperm(n, generator=gen)
+        val_idx, train_idx = split[:n_val], split[n_val:]
+        best_val = np.inf
+        best_state = None
+        stale = 0
         history = []
-        step = 0
+        self.flow.train()
         for epoch in range(epochs):
-            perm = rng.permutation(n)
+            perm = train_idx[torch.randperm(len(train_idx), generator=gen)]
             losses = []
-            for start in range(0, n, batch_size):
+            for start in range(0, len(perm), batch_size):
                 idx = perm[start:start + batch_size]
-                loss, grad = self._nll_and_grad(C[idx], Theta[idx])
-                losses.append(loss)
-                glist = grad.as_list()
-                step += 1
-                for i, (pi, gi) in enumerate(zip(params, glist)):
-                    gi = gi + weight_decay * pi
-                    m[i] = b1 * m[i] + (1 - b1) * gi
-                    v[i] = b2 * v[i] + (1 - b2) * gi * gi
-                    mhat = m[i] / (1 - b1 ** step)
-                    vhat = v[i] / (1 - b2 ** step)
-                    pi -= lr * mhat / (np.sqrt(vhat) + eps)
+                loss = -self.flow(Ct[idx]).log_prob(Tt[idx]).mean()
+                opt.zero_grad()
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(self.flow.parameters(), 5.0)
+                opt.step()
+                losses.append(float(loss.detach()))
+            sched.step()
             history.append(float(np.mean(losses)))
+            if n_val > 0:
+                with torch.no_grad():
+                    val_nll = float(-self.flow(Ct[val_idx]).log_prob(Tt[val_idx]).mean())
+                if val_nll < best_val - 1e-4:
+                    best_val = val_nll
+                    best_state = copy.deepcopy(self.flow.state_dict())
+                    stale = 0
+                else:
+                    stale += 1
             if verbose and (epoch % 50 == 0 or epoch == epochs - 1):
-                print(f"  epoch {epoch:4d}: NLL {history[-1]:.4f}")
+                msg = f"  epoch {epoch:4d}: NLL {history[-1]:.4f}"
+                if n_val > 0:
+                    msg += f"  val {val_nll:.4f} (best {best_val:.4f})"
+                print(msg)
+            if n_val > 0 and stale >= patience:
+                if verbose:
+                    print(f"  early stop at epoch {epoch} (best val NLL {best_val:.4f})")
+                break
+        if best_state is not None:
+            self.flow.load_state_dict(best_state)
+        self.flow.eval()
         return history
 
 
@@ -297,21 +253,22 @@ class MixtureDensityNetwork:
 
 @dataclass
 class AmortizedPosterior:
-    """Trained NPE bundle: featurizer + MDN + standardization."""
+    """Trained NPE bundle: featurizer + conditional flow + standardization."""
 
     featurizer: ResidualProjectionFeaturizer
-    mdn: MixtureDensityNetwork
+    flow: ConditionalFlow
     prior_sd: np.ndarray               # (3,) theta standardization
     metadata: dict = field(default_factory=dict)
 
     def infer(self, c: np.ndarray, rng: np.random.Generator):
         """Return (theta_map, theta_cov) in physical units + a sampler."""
-        mean_std, cov_std = self.mdn.posterior_mean_cov(c)
+        mean_std, cov_std = self.flow.posterior_mean_cov(c)
         theta_map = DetectorState.from_vector(mean_std * self.prior_sd)
         cov = cov_std * np.outer(self.prior_sd, self.prior_sd)
 
         def sampler(n: int, rng_local: np.random.Generator) -> list[DetectorState]:
-            s = self.mdn.sample(c, n, rng_local) * self.prior_sd
+            seed = int(rng_local.integers(0, 2**31 - 1))
+            s = self.flow.sample_np(c, n, seed) * self.prior_sd
             return [DetectorState.from_vector(v) for v in s]
 
         return theta_map, cov, sampler
@@ -322,32 +279,35 @@ class AmortizedPosterior:
         from pathlib import Path
 
         Path(path).parent.mkdir(parents=True, exist_ok=True)
-        p = self.mdn.p
-        np.savez(
-            path,
-            W1=p.W1, b1=p.b1, W2=p.W2, b2=p.b2, W_out=p.W_out, b_out=p.b_out,
-            prior_sd=self.prior_sd,
-            control_dim=self.featurizer.control_dim,
-            hf_component_scale=self.featurizer.hf_component_scale,
-            lf_component_scale=self.featurizer.lf_component_scale,
-            n_components=self.mdn.K,
-            hidden=self.mdn.hidden,
-        )
+        torch.save({
+            "state_dict": self.flow.state_dict(),
+            "context_dim": self.flow.context_dim,
+            "theta_dim": self.flow.theta_dim,
+            "hparams": self.flow.hparams,
+            "prior_sd": torch.as_tensor(self.prior_sd),
+            "control_dim": self.featurizer.control_dim,
+            "hf_component_scale": torch.as_tensor(self.featurizer.hf_component_scale),
+            "lf_component_scale": torch.as_tensor(self.featurizer.lf_component_scale),
+            "metadata": self.metadata,
+        }, path)
 
     @staticmethod
     def load(path: str) -> "AmortizedPosterior":
-        d = np.load(path, allow_pickle=False)
+        d = torch.load(path, map_location="cpu", weights_only=True)
         featurizer = ResidualProjectionFeaturizer(
             control_dim=int(d["control_dim"]),
-            hf_component_scale=d["hf_component_scale"],
-            lf_component_scale=d["lf_component_scale"],
+            hf_component_scale=d["hf_component_scale"].double().numpy(),
+            lf_component_scale=d["lf_component_scale"].double().numpy(),
         )
-        params = MDNParams(d["W1"], d["b1"], d["W2"], d["b2"], d["W_out"], d["b_out"])
-        mdn = MixtureDensityNetwork(
-            input_dim=params.W1.shape[0], n_components=int(d["n_components"]),
-            hidden=int(d["hidden"]), params=params,
+        flow = ConditionalFlow(
+            int(d["context_dim"]), int(d["theta_dim"]), **d["hparams"],
         )
-        return AmortizedPosterior(featurizer, mdn, d["prior_sd"])
+        flow.load_state_dict(d["state_dict"])
+        flow.eval()
+        return AmortizedPosterior(
+            featurizer, flow, d["prior_sd"].double().numpy(),
+            metadata=dict(d.get("metadata", {})),
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -394,14 +354,17 @@ def build_conditioning(
 class TrainingConfig:
     """Settings for offline NPE training (roadmap Phase 2.1)."""
 
-    n_episodes: int = 12000
+    n_episodes: int = 24000
     hf_range: tuple = (3, 12)          # measurements per episode
     lf_range: tuple = (0, 8)
-    n_components: int = 5
-    hidden: int = 96
-    epochs: int = 600
+    transforms: int = 3                # spline-flow transform layers
+    hidden: int = 96                   # hyper-network hidden width
+    bins: int = 8                      # spline bins per transform
+    epochs: int = 300
     batch_size: int = 256
-    lr: float = 3e-3
+    lr: float = 1e-3
+    val_fraction: float = 0.1          # held-out episodes for early stopping
+    patience: int = 40                 # epochs without val improvement
     # Misspecification robustness: amplitude of the smooth systematic
     # bias injected into each episode's summaries, in units of each
     # component's response scale (0 disables — do not use for production).
@@ -429,20 +392,22 @@ def _component_scales(simulator, control_map, objective, n: int, rng):
     return summ, refl, hf_scale, lf_scale
 
 
-def train_amortized_posterior(
+def generate_training_episodes(
     simulator,
     control_map,
     config,
     train_config: TrainingConfig | None = None,
-    verbose: bool = False,
-) -> AmortizedPosterior:
-    """Train an :class:`AmortizedPosterior` offline against the simulator.
+):
+    """Simulate the NPE training set (episode generation only).
 
     Draws ``theta`` from the Step-5 prior and measurement sets at random
     control inputs, simulates the summary vectors with measurement noise
     and an injected smooth systematic (misspecification robustness), and
-    fits the mixture-density network to recover ``theta`` from the
-    residual-projection conditioning vector.
+    returns ``(featurizer, prior_sd, C, Theta)`` where ``C`` are the
+    conditioning vectors and ``Theta`` the standardized true states.
+    Split out from :func:`train_amortized_posterior` because episode
+    generation dominates the training cost and can be reused across
+    hyperparameter settings.
     """
     tc = train_config or TrainingConfig()
     rng = np.random.default_rng(tc.seed)
@@ -489,25 +454,46 @@ def train_amortized_posterior(
             objective, summ, refl,
         )
         Theta[e] = theta_std
+    return featurizer, prior_sd, C, Theta
 
-    mdn = MixtureDensityNetwork(
-        input_dim=featurizer.dim, n_components=tc.n_components, hidden=tc.hidden,
-        seed=tc.seed,
+
+def train_amortized_posterior(
+    simulator,
+    control_map,
+    config,
+    train_config: TrainingConfig | None = None,
+    verbose: bool = False,
+    episodes: tuple | None = None,
+) -> AmortizedPosterior:
+    """Train an :class:`AmortizedPosterior` offline against the simulator.
+
+    Generates training episodes (see :func:`generate_training_episodes`;
+    pass a pre-generated tuple via ``episodes`` to skip this) and fits
+    the conditional spline flow to recover ``theta`` from the
+    residual-projection conditioning vector, with validation-based early
+    stopping.
+    """
+    tc = train_config or TrainingConfig()
+    featurizer, prior_sd, C, Theta = episodes or generate_training_episodes(
+        simulator, control_map, config, tc
     )
-    history = mdn.fit(
+    flow = ConditionalFlow(
+        featurizer.dim, 3, transforms=tc.transforms, hidden=tc.hidden,
+        bins=tc.bins, seed=tc.seed,
+    )
+    history = flow.fit(
         C, Theta, epochs=tc.epochs, batch_size=tc.batch_size, lr=tc.lr,
+        val_fraction=tc.val_fraction, patience=tc.patience,
         seed=tc.seed, verbose=verbose,
     )
     return AmortizedPosterior(
         featurizer=featurizer,
-        mdn=mdn,
+        flow=flow,
         prior_sd=prior_sd,
         metadata={
-            "n_episodes": tc.n_episodes,
+            "n_episodes": len(C),
             "final_nll": history[-1],
             "objective": config.objective,
             "discrepancy_injection": tc.discrepancy_injection,
         },
     )
-
-
