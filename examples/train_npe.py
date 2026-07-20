@@ -1,13 +1,13 @@
 """Train and export the amortized NPE weights (roadmap Phase 2.1).
 
-Offline training against the fast simulator, exported to a plain ``.npz``
-weight blob so the online loop stays numpy/scipy-only. Re-run this
+Offline training of the conditional spline flow (PyTorch + zuko) against
+the fast simulator, exported as a ``.pt`` checkpoint. Re-run this
 whenever the simulator, control basis, or objective in the settings file
 changes — the conditioning statistic and network are tied to them.
 
 Usage:
     python examples/train_npe.py [--settings PATH] [--window NAME]
-        [--out weights/npe_prototype.npz] [--episodes 8000] [--epochs 400]
+        [--out weights/npe_prototype.pt] [--episodes 24000] [--epochs 300]
 """
 
 import argparse
@@ -25,9 +25,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--settings", default=None)
     parser.add_argument("--window", default=None)
-    parser.add_argument("--out", default="weights/npe_prototype.npz")
-    parser.add_argument("--episodes", type=int, default=8000)
-    parser.add_argument("--epochs", type=int, default=400)
+    parser.add_argument("--out", default="weights/npe_prototype.pt")
+    parser.add_argument("--episodes", type=int, default=24000)
+    parser.add_argument("--epochs", type=int, default=300)
     parser.add_argument("--seed", type=int, default=0)
     args = parser.parse_args()
 

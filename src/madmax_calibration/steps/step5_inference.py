@@ -69,7 +69,7 @@ _POSTERIOR_CACHE: dict = {}
 def _default_weights_path() -> str:
     from pathlib import Path
 
-    return str(Path(__file__).resolve().parents[3] / "weights" / "npe_prototype.npz")
+    return str(Path(__file__).resolve().parents[3] / "weights" / "npe_prototype.pt")
 
 
 def _load_amortized_posterior(path: str | None):

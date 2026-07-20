@@ -194,13 +194,12 @@ estimation, NPE) as the Step-5 engine, replacing joint MAP + Laplace.
 
 ### 2.1 Amortized NPE for the detector state  *(effort: L)* — ✅ implemented
 
-- **Network (as implemented):** a compact mixture-density network
-  (`madmax_calibration.amortized`) — two tanh layers into a diagonal
-  Gaussian mixture over standardized θ — trained offline against the
-  simulator and evaluated online in ~0.1 ms. It is written in **pure
-  numpy** (forward, sampling, and hand-derived-gradient Adam training),
-  so no PyTorch/SBI stack is needed even offline, and weights export to
-  a plain `.npz` blob for a numpy-only online runtime.
+- **Network (as implemented):** a conditional **neural spline flow**
+  (`madmax_calibration.amortized`) over standardized θ, built on the
+  established SBI stack — PyTorch and the
+  [zuko](https://zuko.readthedocs.io) flow library — trained offline
+  against the simulator (AdamW, cosine schedule) and evaluated online in
+  milliseconds. Weights ship as a standard `.pt` checkpoint.
 - **Conditioning:** θ is global while measurements land at arbitrary u,
   so the network conditions on a fixed-length, permutation-invariant
   residual-projection summary (each measurement's residual-vs-nominal
@@ -211,30 +210,44 @@ estimation, NPE) as the Step-5 engine, replacing joint MAP + Laplace.
   under model error. The online discrepancy GPs are **kept** — NPE
   handles θ; drift/noise and the per-channel discrepancy GPs are then
   fit at the NPE estimate (the hybrid the roadmap specified).
-- **Online use:** `Step5Result.theta_samples` is now exact mixture
+- **Online use:** `Step5Result.theta_samples` is now exact flow
   sampling; the Step-6 interface is unchanged; Step 5 is ~3× faster
   (no L-BFGS + finite-difference Hessian).
 
-**Acceptance (measured, benchmark 3 seeds, joint_map vs amortized_npe):**
-equal-or-better validated improvement (0.073 → 0.080) at equal HF count,
-3/3 significant, 100% safety/budget; ~3× faster inference; posterior
-coverage 0.96 → 1.00 (honestly calibrated, often wider, vs the
-overconfident Laplace on the degeneracy ridge). Kept **opt-in** (default
-`joint_map`) because the weights are basis/window-specific — the shipped
-`weights/npe_prototype.npz` is for window 1; a dimension guard falls back
+**Acceptance (measured, benchmark 3 seeds, joint_map vs amortized_npe,
+PyTorch/zuko flow):** equal validated improvement (0.074 ± 0.005 →
+0.072 ± 0.002), 3/3 significant, 100% safety/budget; ~3× faster
+inference (measured 3.2 s → 1.0 s per Step-5 update: amortized forward
+pass instead of L-BFGS + finite-difference Hessian);
+posterior coverage 0.96 → 1.00 — honestly calibrated and typically
+*wider* than the overconfident Laplace on the degeneracy ridge, which
+also means the loop spends more HF measurements before its stopping
+rule fires (8.7 → 14.3 mean HF on this benchmark). Kept **opt-in**
+(default `joint_map`) because the weights are basis/window-specific — the shipped
+`weights/npe_prototype.pt` is for window 1; a dimension guard falls back
 to joint_map on mismatch, and window-conditioned amortization is Phase 5.
 
-**Not carried over from the sketch:** a separate PyTorch/`sbi`
-dependency (the pure-numpy MDN made it unnecessary) and one-network-for-
-all-windows conditioning (deferred to Phase 5 with the transfer work).
+**Not carried over from the sketch:** one-network-for-all-windows
+conditioning (deferred to Phase 5 with the transfer work).
+
+**Dependency policy:** established libraries are used wherever they fit —
+PyTorch + zuko here, and e.g. BoTorch is the natural anchor for the
+Phase-3 acquisition work (re-aligning with the design notes, which
+assumed a BoTorch-class stack from the start). Nothing is hand-rolled
+for the sake of a smaller dependency footprint.
 
 ### 2.2 Calibration validation of the posterior  *(effort: M)* — ✅ implemented
 
 Simulation-based calibration (`madmax_calibration.sbc`): rank-uniformity
 of the true θ among posterior samples plus empirical 1/2-σ coverage,
-run **with and without** injected discrepancy. On the shipped weights the
-well-specified case is calibrated (rank KS p > 0.3, 2σ coverage
-0.93–0.95) and degrades gracefully to ~0.9 under injected systematics.
+run **with and without** injected discrepancy. On the shipped flow
+weights the well-specified case is calibrated (rank KS p = 0.70–0.93, 2σ
+coverage 0.94–0.964) and stays ≈0.95 under injected systematics
+(coverage 0.945–0.96, KS p ≥ 0.3). SBC earned its keep during the
+PyTorch/zuko rewrite: a fixed-epoch-budget flow trains to a much lower
+NLL but *fails* SBC (overconfident, 2σ coverage ≈ 0.84–0.88) —
+validation-based early stopping (the standard NPE recipe) is what keeps
+the posterior calibrated, and SBC is the instrument that catches it.
 The overconfidence of the Laplace engine on the degeneracy ridge is the
 explicit regression target; SBC is now the acceptance instrument for the
 amortized engine (tests in `tests/test_amortized.py`).

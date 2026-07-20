@@ -87,6 +87,10 @@ def run_sbc(
     ``discrepancy_injection``), infers the posterior, and records the rank
     of each true parameter among posterior samples plus 1/2-sigma
     coverage. ``discrepancy_injection = 0`` tests the well-specified case.
+
+    The measurement designs are drawn from the same distribution as
+    training (domain-wide uniform): SBC is only meaningful against the
+    joint distribution the posterior is amortized for.
     """
     rng = np.random.default_rng(seed)
     objective = Objective(config.objective)

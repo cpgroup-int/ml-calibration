@@ -48,12 +48,13 @@ safeguards.
 `Step5Config.inference_engine` selects how $\theta$ is estimated
 (roadmap Phase 2): the default **`joint_map`** (joint MAP + Laplace,
 described here) or **`amortized_npe`** — an amortized neural posterior
-estimator, calibrated and ~3× faster, hybrid with the online discrepancy
-GPs. The NPE engine loads a trained weights blob, computes a
-residual-projection conditioning vector from the current dataset, reads
-off $p(\theta\mid D)$, then fits drift/noise and the discrepancy GPs at
+estimator (a conditional spline flow, PyTorch + zuko), calibrated and
+~3× faster, hybrid with the online discrepancy GPs. The NPE engine
+loads a trained `.pt` checkpoint, computes a residual-projection
+conditioning vector from the current dataset, reads off
+$p(\theta\mid D)$, then fits drift/noise and the discrepancy GPs at
 that estimate — everything downstream (classification, LF link, Step 6
-handoff) is shared, and `theta_samples` becomes exact mixture sampling.
+handoff) is shared, and `theta_samples` becomes exact flow sampling.
 It falls back to `joint_map` (with a diagnostic) if the weights are
 missing or do not match the control basis. The full treatment,
 simulation-based-calibration validation, and the measured trade-off are

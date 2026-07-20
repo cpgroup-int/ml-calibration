@@ -110,10 +110,11 @@ contributes (J, log peak, band centroid, bandwidth, flatness) with one
 discrepancy GP per component; `observation_level = "scalar"` retains the
 J-only special case for A/B benchmarking.  An **amortized neural
 posterior estimator** is available as an opt-in engine
-(`inference_engine = "amortized_npe"`, roadmap Phase 2): calibrated
-(SBC-validated), ~3x faster, hybrid with the online discrepancy GPs, and
-exported to plain numpy weights.  It is opt-in because the weights are
-basis/window-specific (window-conditioned amortization is Phase 5).
+(`inference_engine = "amortized_npe"`, roadmap Phase 2): a conditional
+neural spline flow (PyTorch + zuko), calibrated (SBC-validated), ~3x
+faster, hybrid with the online discrepancy GPs, shipped as a `.pt`
+checkpoint.  It is opt-in because the weights are basis/window-specific
+(window-conditioned amortization is Phase 5).
 Per-iteration MCMC (Levels B/C) is not implemented — amortization
 provides the flexible posterior instead; the `Step5Result.theta_samples`
 interface already matched what they would provide.

@@ -1,9 +1,9 @@
 """Amortized NPE engine tests (roadmap Phase 2).
 
-Covers the pure-numpy mixture density network (gradient correctness,
-sampling, persistence), the residual-projection conditioning, the Step-5
-integration (engine selection + fallback), and simulation-based
-calibration of the shipped weights.
+Covers the conditional spline flow (PyTorch + zuko: conditional-density
+learning, sampling, persistence), the residual-projection conditioning,
+the Step-5 integration (engine selection + fallback), and
+simulation-based calibration of the shipped weights.
 """
 
 import numpy as np
@@ -11,7 +11,7 @@ import pytest
 
 from madmax_calibration.amortized import (
     AmortizedPosterior,
-    MixtureDensityNetwork,
+    ConditionalFlow,
     ResidualProjectionFeaturizer,
     TrainingConfig,
     build_conditioning,
@@ -23,39 +23,17 @@ from tests.conftest import make_setup
 
 
 # ---------------------------------------------------------------------------
-# Mixture density network
+# Conditional flow
 # ---------------------------------------------------------------------------
 
-def test_mdn_gradient_matches_numerical():
-    rng = np.random.default_rng(0)
-    net = MixtureDensityNetwork(input_dim=6, theta_dim=3, n_components=3, hidden=8, seed=1)
-    C = rng.standard_normal((5, 6))
-    Th = rng.standard_normal((5, 3))
-    _, grad = net._nll_and_grad(C, Th)
-    eps = 1e-6
-    max_err = 0.0
-    for pi, gi in zip(net.p.as_list(), grad.as_list()):
-        fp, fg = pi.ravel(), gi.ravel()
-        for _ in range(15):
-            j = rng.integers(len(fp))
-            old = fp[j]
-            fp[j] = old + eps
-            lp, _ = net._nll_and_grad(C, Th)
-            fp[j] = old - eps
-            lm, _ = net._nll_and_grad(C, Th)
-            fp[j] = old
-            max_err = max(max_err, abs((lp - lm) / (2 * eps) - fg[j]))
-    assert max_err < 1e-5
-
-
-def test_mdn_learns_conditional_mean():
-    """A tiny MDN recovers a linear conditional mean from noisy data."""
+def test_flow_learns_conditional_mean():
+    """A small flow recovers a linear conditional mean from noisy data."""
     rng = np.random.default_rng(0)
     C = rng.uniform(-1, 1, size=(2000, 2))
     W = np.array([[1.0, -0.5, 0.3], [0.2, 0.8, -0.4]])
     Th = C @ W + 0.05 * rng.standard_normal((2000, 3))
-    net = MixtureDensityNetwork(input_dim=2, theta_dim=3, n_components=2, hidden=16, seed=1)
-    hist = net.fit(C, Th, epochs=150, lr=5e-3, seed=0)
+    net = ConditionalFlow(context_dim=2, theta_dim=3, transforms=2, hidden=32, seed=1)
+    hist = net.fit(C, Th, epochs=60, seed=0)
     assert hist[-1] < hist[0]
     c_test = np.array([0.5, -0.3])
     mean, cov = net.posterior_mean_cov(c_test)
@@ -63,13 +41,25 @@ def test_mdn_learns_conditional_mean():
     assert np.all(np.diag(cov) < 0.1)          # tight around the true mean
 
 
-def test_mdn_sampling_matches_mean_cov():
-    net = MixtureDensityNetwork(input_dim=3, theta_dim=3, n_components=3, hidden=8, seed=2)
+def test_flow_sampling_matches_moments():
+    """Independent sample batches agree with posterior_mean_cov."""
+    net = ConditionalFlow(context_dim=3, theta_dim=3, transforms=2, hidden=16, seed=2)
     c = np.array([0.1, -0.2, 0.3])
     mean, cov = net.posterior_mean_cov(c)
-    samples = net.sample(c, 20000, np.random.default_rng(0))
+    samples = net.sample_np(c, 20000, seed=123)
+    assert samples.shape == (20000, 3)
     assert np.allclose(samples.mean(0), mean, atol=0.05)
     assert np.allclose(np.cov(samples.T), cov, atol=0.1)
+
+
+def test_flow_sampling_is_seed_reproducible():
+    net = ConditionalFlow(context_dim=2, theta_dim=3, transforms=2, hidden=16, seed=0)
+    c = np.array([0.4, -0.1])
+    s1 = net.sample_np(c, 100, seed=7)
+    s2 = net.sample_np(c, 100, seed=7)
+    s3 = net.sample_np(c, 100, seed=8)
+    assert np.array_equal(s1, s2)
+    assert not np.array_equal(s1, s3)
 
 
 # ---------------------------------------------------------------------------
@@ -93,9 +83,10 @@ def test_featurizer_dimension_and_permutation_invariance():
 def test_posterior_save_load_round_trip(tmp_path):
     config, cm, sim, _ = make_setup()
     post = train_amortized_posterior(
-        sim, cm, config, TrainingConfig(n_episodes=300, epochs=20, hidden=16, seed=0),
+        sim, cm, config,
+        TrainingConfig(n_episodes=300, epochs=10, transforms=2, hidden=16, seed=0),
     )
-    path = tmp_path / "npe.npz"
+    path = tmp_path / "npe.pt"
     post.save(path)
     reloaded = AmortizedPosterior.load(path)
     rng = np.random.default_rng(0)
@@ -120,7 +111,7 @@ def test_training_recovers_theta_direction():
     config, cm, sim, _ = make_setup()
     post = train_amortized_posterior(
         sim, cm, config,
-        TrainingConfig(n_episodes=3000, epochs=150, hidden=48, n_components=4, seed=0),
+        TrainingConfig(n_episodes=3000, epochs=80, transforms=2, hidden=48, seed=0),
     )
     obj = Objective(config.objective)
     summ = CurveSummarizer(obj, sim.freqs)
@@ -175,7 +166,7 @@ def test_step5_uses_npe_engine_with_shipped_weights():
     result = loop.run(max_iterations=6)
     assert result.step5.inference_engine == "amortized_npe"
     assert result.step5.sampler is not None
-    # Exact mixture sampling is used for theta_samples.
+    # Exact flow sampling is used for theta_samples.
     samples = result.step5.theta_samples(50, np.random.default_rng(0))
     assert len(samples) == 50
     assert result.J_best > result.J_baseline
@@ -191,7 +182,7 @@ def test_step5_falls_back_when_weights_missing():
 
     config, cm, sim, _ = make_setup()
     config.step5.inference_engine = "amortized_npe"
-    config.step5.npe_weights_path = "/nonexistent/weights.npz"
+    config.step5.npe_weights_path = "/nonexistent/weights.pt"
     summ = CurveSummarizer(Objective(config.objective), sim.freqs)
     ds = _make_summary_dataset(sim, cm, summ, DetectorState(z_offset=0.3e-3), n_points=6)
     res = run_step5(ds, sim, cm, config, Objective(config.objective))

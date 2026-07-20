@@ -102,9 +102,9 @@ the suite stays fast while exercising identical code paths.
 
 | Requirement | Test |
 |---|---|
-| MDN backprop matches numerical gradient | `test_mdn_gradient_matches_numerical` |
-| network learns a conditional mean | `test_mdn_learns_conditional_mean` |
-| sampling matches mixture mean/cov | `test_mdn_sampling_matches_mean_cov` |
+| flow learns a conditional mean | `test_flow_learns_conditional_mean` |
+| sampling matches posterior moments | `test_flow_sampling_matches_moments` |
+| sampling is seed-reproducible | `test_flow_sampling_is_seed_reproducible` |
 | conditioning is permutation-invariant, right dim | `test_featurizer_dimension_and_permutation_invariance` |
 | weights save/load round-trip | `test_posterior_save_load_round_trip` |
 | training recovers the detector state | `test_training_recovers_theta_direction` |

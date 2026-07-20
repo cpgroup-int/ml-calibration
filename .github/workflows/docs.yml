@@ -39,6 +39,8 @@ jobs:
       - name: Install package and documentation dependencies
         run: |
           python -m pip install --upgrade pip
+          # CPU-only torch keeps the CI environment small (no CUDA wheels).
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
           pip install -e ".[docs]"
 
       - name: Build HTML documentation (warnings are errors)
